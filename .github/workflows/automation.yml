@@ -1,10 +1,10 @@
-name: Web3 Alpha Intelligence & News Bot
+name: Web3 Airdrop, TGE & VC Funding Bot
 
 on:
   schedule:
     # Runs automatically every 15 minutes
     - cron: '*/15 * * * *'
-  workflow_dispatch: # Allows manual trigger from GitHub UI anytime
+  workflow_dispatch: # Allows manual run anytime from GitHub UI
 
 jobs:
   run-automation:
