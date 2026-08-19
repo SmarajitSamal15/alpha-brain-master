@@ -94,12 +94,9 @@ def generate_smart_event_hash(project_name, event_title, event_type):
 
     milestone_keywords = []
     milestone_map = [
-        ("MAINNET", ["MAINNET"]),
         ("TESTNET", ["TESTNET", "DEVNET", "FAUCET", "QUEST"]),
         ("AIRDROP_CLAIM", ["AIRDROP", "CLAIM", "ELIGIBILITY", "DISTRIBUTION"]),
         ("TGE_SNAPSHOT", ["TGE", "SNAPSHOT", "TOKEN LAUNCH"]),
-        ("LISTING", ["LISTING", "BINANCE", "COINBASE", "OKX", "BYBIT"]),
-        ("HACK", ["HACK", "EXPLOIT", "DRAIN", "ATTACK"]),
         ("SEED_ROUND", ["SEED"]),
         ("SERIES_A", ["SERIES A", "SERIES-A"]),
         ("SERIES_B", ["SERIES B", "SERIES-B"]),
@@ -130,8 +127,6 @@ def detect_link_label(url):
         return "Verify CryptoRank Listing Page"
     elif "mirror.xyz" in domain or "medium.com" in domain:
         return "Read Official Article Announcement"
-    elif "binance.com" in domain or "bybit.com" in domain or "okx.com" in domain:
-        return "Verify Exchange Official Notice"
     return "Verify Official Announcement"
 
 # =================================================================================
@@ -282,7 +277,7 @@ class AlphaDatabase:
                 logging.info(f"🧹 Successfully purged {deleted} record(s) older than {hours} hours from Database.")
 
 # =================================================================================
-# 🧠 DUAL INTELLIGENCE SCANNER ENGINE
+# 🧠 STRICT AIRDROP, TGE & FUNDING INTELLIGENCE SCANNER
 # =================================================================================
 
 class GeminiAlphaEngine:
@@ -294,11 +289,11 @@ class GeminiAlphaEngine:
         logging.info("⚡ Purging database history older than 24 hours...")
         self.db.purge_expired_data(hours=CACHE_PURGE_HOURS)
 
-        logging.info("⚡ Executing Multi-Source Web3 Intelligence Scan...")
+        logging.info("⚡ Executing Strict Airdrop, TGE & VC Funding Scan...")
         raw_items = self.fetch_fresh_web3_intelligence_12h()
 
         if not raw_items:
-            logging.info("ℹ️ No new live Web3 items found within the last 12 hours.")
+            logging.info("ℹ️ No new live Web3 Airdrop, TGE, or Funding items found within the last 12 hours.")
             return
 
         seen_in_run = set()
@@ -310,7 +305,7 @@ class GeminiAlphaEngine:
 
                 p_name = clean_val(item.get("project_name"))
                 e_title = clean_val(item.get("event_title"))
-                event_type = clean_val(item.get("event_type"), "GENERAL_NEWS")
+                event_type = clean_val(item.get("event_type"), "AIRDROP_TESTNET")
 
                 if p_name.upper() in ["UNDISCLOSED", "N/A", "NONE", "UNKNOWN"]:
                     continue
@@ -345,30 +340,30 @@ class GeminiAlphaEngine:
                 continue
 
     def fetch_fresh_web3_intelligence_12h(self):
-        """Scans RootData, CryptoRank, Crypto-Fundraising, RSS Feeds, X, and Web for all 12h Web3 News."""
+        """Scans Web3 sources STRICTLY for Airdrops, TGEs, Snapshots, and VC Funding from the last 12 hours."""
         system_prompt = (
-            "You are an Elite Web3 Intelligence Specialist. Search RootData (rootdata.com), CryptoRank (cryptorank.io), "
-            "Crypto-Fundraising (crypto-fundraising.info), Web3 RSS feeds, Mirror, X/Twitter, and global web sources "
-            "STRICTLY for breaking Web3 news, fresh funding rounds, live airdrops, TGEs, snapshots, incentivized testnets, "
-            "token listings, mainnet upgrades, protocol hacks, and major industry updates announced within the LAST 12 HOURS.\n\n"
-            "CRITICAL MANDATES:\n"
-            "1. Output exact, grammatically flawless, and technically precise word-for-word information.\n"
-            "2. Strictly classify 'event_type' into ONE of: ['VC_FUNDING', 'AIRDROP_TESTNET', 'TGE_SNAPSHOT', 'TOKEN_LISTING', 'MAINNET_UPGRADE', 'SECURITY_ALERT', 'GENERAL_NEWS'].\n"
-            "3. Separate 'fresh_funding', 'total_funding', and 'valuation' cleanly into distinct JSON keys.\n"
-            "4. Separate 'fresh_investors' and 'total_investors'.\n"
-            "5. Provide 'official_direct_link' AND 'source_link'.\n"
-            "6. OUTPUT ONLY VALID JSON CODE BLOCK OR []."
+            "You are an Elite Crypto Airdrop & VC Intelligence Specialist. Search RootData (rootdata.com), CryptoRank (cryptorank.io), "
+            "Crypto-Fundraising (crypto-fundraising.info), Web3 RSS feeds, Mirror, and X/Twitter STRICTLY for:\n"
+            "1. Live/Incentivized Airdrops, Points Programs, Quests, Faucets, and Testnets\n"
+            "2. Confirmed TGE Dates, Snapshot Announcements, Eligibility Verification, and Token Claim Portals\n"
+            "3. Fresh VC Funding Rounds (Seed, Series A/B, Strategic, Private Capital)\n\n"
+            "CRITICAL STRICT MANDATES:\n"
+            "- IGNORE & EXCLUDE all general market news, token exchange listings (Binance/Coinbase listings), partnerships, "
+            "protocol hacks/exploits, governance votes, macro economy, and routine mainnet software upgrades.\n"
+            "- ONLY return actionable high-alpha events strictly related to AIRDROPS, TESTNETS, TGEs, SNAPSHOTS, and VC FUNDING announced within the LAST 12 HOURS.\n"
+            "- Classify 'event_type' strictly into ONE of: ['VC_FUNDING', 'AIRDROP_TESTNET', 'TGE_SNAPSHOT'].\n"
+            "- OUTPUT ONLY VALID JSON CODE BLOCK OR []."
         )
         user_prompt = """
-Search RootData, CryptoRank, Crypto-Fundraising, RSS feeds, and the whole Internet for breaking Web3 announcements from the LAST 12 HOURS.
+Search RootData, CryptoRank, Crypto-Fundraising, RSS feeds, and X/Twitter for breaking Web3 announcements from the LAST 12 HOURS.
 
 JSON Output Schema:
 [
   {
     "project_name": "Exact Project Name",
-    "event_title": "Short Descriptive Event Title (e.g., $15M Series A Raised / TGE Date Confirmed / Mainnet Launch / Airdrop Live / Binance Listing)",
-    "event_type": "VC_FUNDING | AIRDROP_TESTNET | TGE_SNAPSHOT | TOKEN_LISTING | MAINNET_UPGRADE | SECURITY_ALERT | GENERAL_NEWS",
-    "series_round": "Seed / Series A / Strategic / TGE / Mainnet / Undisclosed",
+    "event_title": "Short Descriptive Event Title (e.g., $15M Series A Raised / TGE Date Confirmed / Testnet Live / Airdrop Claim Portal Live)",
+    "event_type": "VC_FUNDING | AIRDROP_TESTNET | TGE_SNAPSHOT",
+    "series_round": "Seed / Series A / Strategic / TGE / Testnet / Undisclosed",
     "fresh_funding": "$XX M or Undisclosed",
     "total_funding": "$XX M or Undisclosed",
     "valuation": "$XX M or Undisclosed",
@@ -391,11 +386,11 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
             return []
 
     def build_beautiful_telegram_post(self, item, source_link, direct_link):
-        """Generates a clean Telegram post with Adaptive Layout (Computer Brain Logic)."""
+        """Generates a clean Telegram post with 3 Core Dynamic Headers."""
         p_name = escape_html(clean_val(item.get("project_name"), "Web3 Project"))
         e_title = escape_html(clean_val(item.get("event_title"), "Breaking Update"))
         round_type = escape_html(clean_val(item.get("series_round"), "Milestone Phase"))
-        event_type = str(item.get("event_type", "GENERAL_NEWS")).upper()
+        event_type = str(item.get("event_type", "AIRDROP_TESTNET")).upper()
         
         fresh_raised = escape_html(clean_val(item.get("fresh_funding"), "Undisclosed"))
         total_raised = escape_html(clean_val(item.get("total_funding"), "Undisclosed"))
@@ -405,26 +400,10 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
         total_vcs = escape_html(clean_investor_list(item.get("total_investors")))
         summary = escape_html(clean_val(item.get("executive_summary"), "New ecosystem milestone and institutional update recorded."))
 
-        # 7 Granular Dynamic Header Classifications
+        # 3 Core Dynamic Header Classifications
         check_text = (e_title + " " + round_type + " " + event_type).lower()
 
-        if "security" in check_text or "hack" in check_text or "exploit" in check_text or event_type == "SECURITY_ALERT":
-            header = "🚨 <b>WEB3 SECURITY & HACK ALERT</b> 🚨"
-            is_vc_post = False
-
-        elif "listing" in check_text or event_type == "TOKEN_LISTING":
-            header = "📈 <b>MAJOR TOKEN LISTING ALERT</b> 📈"
-            is_vc_post = False
-
-        elif "mainnet" in check_text or "upgrade" in check_text or event_type == "MAINNET_UPGRADE":
-            header = "⚙️ <b>MAINNET & PROTOCOL UPGRADE ALERT</b> ⚙️"
-            is_vc_post = False
-
-        elif any(kw in check_text for kw in ["airdrop", "testnet", "quest", "claim", "points", "faucet"]) or event_type == "AIRDROP_TESTNET":
-            header = "🚀 <b>LIVE AIRDROP & TESTNET ALERT</b> 🚀"
-            is_vc_post = False
-
-        elif any(kw in check_text for kw in ["tge", "snapshot", "token launch"]) or event_type == "TGE_SNAPSHOT":
+        if any(kw in check_text for kw in ["tge", "snapshot", "token launch"]) or event_type == "TGE_SNAPSHOT":
             header = "🔥 <b>BREAKING TGE & SNAPSHOT ALERT</b> 🔥"
             is_vc_post = False
 
@@ -433,11 +412,10 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
             is_vc_post = True
 
         else:
-            header = "⚡ <b>BREAKING WEB3 NEWS ALERT</b> ⚡"
+            header = "🚀 <b>LIVE AIRDROP & TESTNET ALERT</b> 🚀"
             is_vc_post = False
 
-        # COMPUTER BRAIN LOGIC: Smart Adaptive Funding Block Rendering
-        # Show funding block if it's explicitly a VC post OR if real financial data actually exists
+        # Smart Adaptive Funding Block Rendering
         has_real_financial_data = any(val != "Undisclosed" for val in [fresh_raised, total_raised, valuation, fresh_vcs, total_vcs])
         
         funding_section = ""
@@ -519,7 +497,7 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
 
 def main():
     logging.info("=========================================================")
-    logging.info("🚀 STARTING 100/100 PRODUCTION WEB3 AUTOMATION SYSTEM 🚀")
+    logging.info("🚀 STARTING STRICT AIRDROP, TGE & VC FUNDING BOT 🚀")
     logging.info("=========================================================")
 
     key_manager = GeminiAPIKeyManager(GEMINI_API_KEYS, MODEL_CANDIDATES)
@@ -529,7 +507,7 @@ def main():
     # Execute Pipeline
     engine.execute_master_pipeline()
 
-    logging.info("✅ Execution completed with smart event deduplication and clean dynamic formatting.")
+    logging.info("✅ Execution completed cleanly with strict Airdrop/Funding filters.")
 
 if __name__ == "__main__":
     main()
