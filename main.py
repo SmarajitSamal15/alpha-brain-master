@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "@AirdropHeadDepartmentAILabs")
 
-# Multi-Key Rotation Support (Supports 12+ API Keys via CSV in GEMINI_API_KEYS)
+# Multi-Key Rotation Support (CSV list in GEMINI_API_KEYS)
 GEMINI_KEYS_RAW = os.getenv(
     "GEMINI_API_KEYS",
     os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
@@ -39,25 +39,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 # 🧰 HELPER UTILITIES
 # =================================================================================
 
-def clean_val(val, fallback="Undisclosed / Institutional"):
+def clean_val(val, fallback="Undisclosed"):
     if not val or str(val).strip().upper() in ["N/A", "NONE", "UNKNOWN", "NULL", "UNDEFINED", ""]:
         return fallback
     return str(val).strip()
 
-def normalize_name(name):
-    """Normalize project name strictly to catch variations like Project X, Project-X, ProjectX."""
-    if not name:
+def normalize_text(text):
+    """Normalize text string for strict comparison and hashing."""
+    if not text:
         return ""
-    return re.sub(r'[^a-zA-Z0-9]', '', str(name)).upper()
-
-def normalize_domain(domain_or_url):
-    """Extract clean domain for duplicate checking."""
-    if not domain_or_url:
-        return ""
-    val = str(domain_or_url).lower().strip()
-    val = re.sub(r'^https?://', '', val)
-    val = re.sub(r'^www\.', '', val)
-    return val.split('/')[0].split(':')[0]
+    return re.sub(r'[^a-zA-Z0-9]', '', str(text)).upper()
 
 def is_valid_http_url(url):
     """Strict HTTP/HTTPS URL syntax validation."""
@@ -79,12 +70,52 @@ def clean_investor_list(investor_str):
     deduped = []
     
     for item in raw_list:
-        norm = normalize_name(item)
+        norm = normalize_text(item)
         if norm and norm not in seen:
             seen.add(norm)
             deduped.append(item)
             
     return ", ".join(deduped) if deduped else "Institutional / Private Syndicate"
+
+def escape_html(text):
+    """Safely escape HTML entities for Telegram message dispatch."""
+    if not text:
+        return "Undisclosed"
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+def generate_smart_event_hash(project_name, event_title, series_round):
+    """
+    Smart Event-Specific Hash:
+    - Blocks exact duplicate posts for the SAME event (e.g. 'Mainnet Scheduled' vs 'Mainnet Confirmed').
+    - ALLOWS different news updates for the SAME project (e.g. 'Zamica Funding Raised' vs 'Zamica Mainnet Launch').
+    """
+    norm_pname = normalize_text(project_name)
+    combined_text = f"{event_title} {series_round}".upper()
+
+    # Extract event category milestone
+    milestone_keywords = []
+    milestone_map = [
+        ("MAINNET", ["MAINNET"]),
+        ("TESTNET", ["TESTNET", "DEVNET", "FAUCET", "QUEST"]),
+        ("AIRDROP_CLAIM", ["AIRDROP", "CLAIM", "ELIGIBILITY", "DISTRIBUTION"]),
+        ("TGE_SNAPSHOT", ["TGE", "SNAPSHOT", "TOKEN LAUNCH", "LISTING"]),
+        ("SEED_ROUND", ["SEED"]),
+        ("SERIES_A", ["SERIES A", "SERIES-A"]),
+        ("SERIES_B", ["SERIES B", "SERIES-B"]),
+        ("STRATEGIC_ROUND", ["STRATEGIC", "PRIVATE SALE", "RAISED"]),
+    ]
+
+    for label, keywords in milestone_map:
+        if any(kw in combined_text for kw in keywords):
+            milestone_keywords.append(label)
+
+    if not milestone_keywords:
+        # Fallback to normalized title prefix if no distinct keyword match
+        clean_title = normalize_text(event_title)[:12]
+        milestone_keywords.append(clean_title)
+
+    event_signature = f"{norm_pname}_{'_'.join(sorted(set(milestone_keywords)))}"
+    return hashlib.md5(event_signature.encode()).hexdigest()
 
 # =================================================================================
 # 🔄 MULTI-KEY FAILOVER GEMINI MANAGER
@@ -181,7 +212,7 @@ class GeminiAPIKeyManager:
         raise Exception("❌ Exhausted all Gemini API keys and model fallbacks.")
 
 # =================================================================================
-# 💾 DATABASE ENGINE (PERMANENT DUPLICATE LOCK + CACHE PURGE)
+# 💾 DATABASE ENGINE (EVENT-SPECIFIC DUPLICATE STOP + AUTO 24H PURGE)
 # =================================================================================
 
 class AlphaDatabase:
@@ -195,14 +226,6 @@ class AlphaDatabase:
     def init_db(self):
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS project_cache (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT,
-                    unique_hash TEXT UNIQUE,
-                    created_at TEXT
-                )
-            """)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS sent_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -230,18 +253,19 @@ class AlphaDatabase:
             """, (project_name, unique_hash, now_str))
             conn.commit()
 
-    def purge_24h_cache(self, hours=24):
+    def purge_expired_data(self, hours=24):
+        """Purge data older than 24 hours to prevent DB bloat."""
         cutoff_str = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM project_cache WHERE created_at < ?", (cutoff_str,))
+            cursor.execute("DELETE FROM sent_history WHERE sent_at < ?", (cutoff_str,))
             deleted = cursor.rowcount
             conn.commit()
             if deleted > 0:
-                logging.info(f"🧹 Purged {deleted} temporary cache records older than {hours} hours.")
+                logging.info(f"🧹 Successfully purged {deleted} record(s) older than {hours} hours from Database.")
 
 # =================================================================================
-# 🧠 DUAL-PIPELINE AI ENGINE WITH COMPREHENSIVE DATA MANDATE
+# 🧠 DUAL INTELLIGENCE SCANNER ENGINE
 # =================================================================================
 
 class GeminiAlphaEngine:
@@ -250,53 +274,54 @@ class GeminiAlphaEngine:
         self.db = db
 
     def execute_master_pipeline(self):
-        logging.info("⚡ Executing Pipeline 1: VC Fundraising Scan (RootData, CryptoRank, Crypto-Fundraising)...")
-        vc_deals = self.fetch_vc_fundraising_12h()
-        
-        logging.info("⚡ Executing Pipeline 2: Airdrop, TGE & OSINT Scanner...")
-        global_news = self.fetch_global_airdrop_tge_12h()
+        logging.info("⚡ Purging database history older than 24 hours...")
+        self.db.purge_expired_data(hours=CACHE_PURGE_HOURS)
 
-        combined_items = vc_deals + global_news
-        if not combined_items:
-            logging.info("ℹ️ No new items found within the last 12 hours.")
+        logging.info("⚡ Executing Multi-Source Web3 Intelligence Scan...")
+        raw_items = self.fetch_fresh_web3_intelligence_12h()
+
+        if not raw_items:
+            logging.info("ℹ️ No new live Web3 items found within the last 12 hours.")
             return
 
         seen_in_run = set()
 
-        for item in combined_items:
+        for item in raw_items:
             try:
                 if not isinstance(item, dict):
                     continue
 
-                p_name = item.get("project_name", "")
-                category_type = item.get("post_category", "WEB3_NEWS")
-                
-                if not p_name or p_name.upper() in ["N/A", "NONE", "UNKNOWN"]:
+                p_name = clean_val(item.get("project_name"))
+                e_title = clean_val(item.get("event_title"))
+                round_type = clean_val(item.get("series_round"))
+
+                if p_name.upper() in ["UNDISCLOSED", "N/A", "NONE", "UNKNOWN"]:
                     continue
 
-                clean_key = normalize_name(p_name)
-                if not clean_key:
+                norm_pname = normalize_text(p_name)
+                if not norm_pname:
                     continue
 
-                unique_hash = hashlib.md5(f"{clean_key}_{category_type}".encode()).hexdigest()
+                # Generate Smart Event Hash: Stops duplicate same-event posts while allowing distinct new updates for the project
+                unique_hash = generate_smart_event_hash(p_name, e_title, round_type)
 
-                if clean_key in seen_in_run or self.db.is_hash_sent(unique_hash):
-                    logging.info(f"⏭️ Skipping duplicate: {p_name} [{category_type}]")
+                if unique_hash in seen_in_run or self.db.is_hash_sent(unique_hash):
+                    logging.info(f"⏭️ Skipping duplicate event for project: {p_name} | {e_title}")
                     continue
 
-                seen_in_run.add(clean_key)
+                seen_in_run.add(unique_hash)
 
-                # OSINT Enrichment via Gemini Search
-                airdrop_info = self.research_airdrop_whole_internet(p_name, item.get("domain", ""))
-                
-                raw_link = clean_val(airdrop_info.get("airdrop_link"), "").strip()
-                official_link = clean_val(item.get("official_link"), f"https://{item.get('domain', 'google.com')}")
-                
-                if not is_valid_http_url(official_link):
-                    official_link = f"https://{item.get('domain', 'rootdata.com')}"
+                # Direct & Source links validation
+                source_link = clean_val(item.get("source_link"), "https://rootdata.com")
+                direct_link = clean_val(item.get("official_direct_link"), source_link)
 
-                # Render Telegram HTML Post with full accurate structure
-                message = self.build_beautiful_telegram_post(item, airdrop_info, raw_link, official_link)
+                if not is_valid_http_url(source_link):
+                    source_link = "https://rootdata.com"
+                if not is_valid_http_url(direct_link):
+                    direct_link = source_link
+
+                # Render Clean Telegram HTML Post
+                message = self.build_beautiful_telegram_post(item, source_link, direct_link)
 
                 if self.send_telegram_retry_safe(message):
                     self.db.mark_hash_sent(p_name, unique_hash)
@@ -305,37 +330,38 @@ class GeminiAlphaEngine:
                 logging.error(f"⚠️ Error processing item: {str(e)}")
                 continue
 
-    def fetch_vc_fundraising_12h(self):
-        """Pipeline 1: Target RootData, CryptoRank, Crypto-Fundraising and Web for VC Deals"""
+    def fetch_fresh_web3_intelligence_12h(self):
+        """Scans RootData, CryptoRank, Crypto-Fundraising, RSS Feeds, X, and Web for fresh 12h Web3 News."""
         system_prompt = (
-            "You are a Senior Web3 Venture Capital Intelligence Analyst. Search RootData (rootdata.com), CryptoRank (cryptorank.io), "
-            "Crypto-Fundraising (crypto-fundraising.info), and top Web3 news strictly for fresh VC funding rounds announced within the LAST 12 HOURS.\n"
-            "CRITICAL MANDATE:\n"
-            "1. Output exact, grammatically flawless, and technically precise information.\n"
-            "2. Do NOT summarize lazily or abbreviate project or investor names.\n"
-            "3. Identify category (e.g., Layer 1, DeFi, AI, ZK Infrastructure, DePIN).\n"
-            "4. Provide exact 'fresh_investors' (lead and participating in this round) AND 'total_investors' (all historic backers)."
+            "You are an Elite Web3 Intelligence Specialist. Search RootData (rootdata.com), CryptoRank (cryptorank.io), "
+            "Crypto-Fundraising (crypto-fundraising.info), Web3 RSS feeds, Mirror, X/Twitter, and global web sources "
+            "STRICTLY for breaking Web3 news, fresh funding rounds, live airdrops, TGEs, snapshots, and incentivized testnets announced within the LAST 12 HOURS.\n\n"
+            "CRITICAL MANDATES:\n"
+            "1. Output exact, grammatically flawless, and technically precise word-for-word information.\n"
+            "2. Separate 'fresh_funding' (Fresh Raised in this round), 'total_funding' (Total Capital Raised historically), and 'valuation' cleanly into distinct JSON keys.\n"
+            "3. Separate 'fresh_investors' (lead/fresh round backers) and 'total_investors' (all historic backers).\n"
+            "4. Provide 'official_direct_link' (action portal, claim link, app, or testnet) AND 'source_link' (official announcement, tweet, or RootData link)."
         )
         user_prompt = """
-Search RootData, CryptoRank, Crypto-Fundraising, and top Web3 outlets for Web3 startup fundraising announcements from the LAST 12 HOURS.
+Search RootData, CryptoRank, Crypto-Fundraising, RSS feeds, and the whole Internet for breaking Web3 announcements from the LAST 12 HOURS.
 
-JSON Structure:
+JSON Output Schema:
 [
   {
-    "post_category": "VC_FUNDING",
     "project_name": "Exact Project Name",
-    "domain": "official domain",
-    "niche_category": "DeFi / AI / Layer 1 / DePIN / Infrastructure",
-    "series_round": "Seed / Series A / Strategic / Pre-Seed / Private",
-    "funding_amount": "$XX M or Undisclosed",
+    "event_title": "Short Descriptive Event Title (e.g., $15M Series A Raised / TGE Date Confirmed / Airdrop Claim Portal Live)",
+    "series_round": "Seed / Series A / Strategic / TGE / Airdrop Claim",
+    "fresh_funding": "$XX M or Undisclosed",
     "total_funding": "$XX M or Undisclosed",
+    "valuation": "$XX M or Undisclosed",
     "fresh_investors": "Comma separated fresh round investors",
     "total_investors": "Comma separated all historical backers",
-    "executive_summary": "2-3 precise sentences explaining project utility and funding purpose.",
-    "official_link": "Direct announcement URL or RootData/CryptoRank link"
+    "official_direct_link": "Direct participation subdomain, claim portal, testnet link, or official site",
+    "source_link": "Direct official announcement URL, tweet, or RootData page",
+    "executive_summary": "2-3 precise sentences detailing project utility, event scope, and immediate action steps."
   }
 ]
-Output ONLY raw JSON code block or [] if empty.
+Return ONLY a valid JSON array block or [] if no fresh data found.
 """
         try:
             res = self.key_manager.call_gemini_with_search(system_prompt, user_prompt)
@@ -343,124 +369,54 @@ Output ONLY raw JSON code block or [] if empty.
             data = json.loads(json_str)
             return data if isinstance(data, list) else []
         except Exception as e:
-            logging.error(f"Error in VC Pipeline: {str(e)}")
+            logging.error(f"Error in Multi-Source Intelligence Scan: {str(e)}")
             return []
 
-    def fetch_global_airdrop_tge_12h(self):
-        """Pipeline 2: Comprehensive Airdrop, TGE, Testnet & OSINT Scanner"""
-        system_prompt = (
-            "You are a Web3 Intelligence Specialist. Search the entire web (Google News, X/Twitter, Web3 Blogs, Medium, Mirror) "
-            "strictly for fresh Web3 announcements from the LAST 12 HOURS regarding Airdrops, TGEs, Snapshots, and Incentivized Testnets.\n"
-            "CRITICAL MANDATE:\n"
-            "1. You MUST also research and retrieve the project's funding amount, round, and investor backers if available.\n"
-            "2. Ensure complete grammatical accuracy, exact naming, and clear actionable steps."
-        )
-        user_prompt = """
-Search the ENTIRE WEB for breaking Web3 news from the LAST 12 HOURS covering:
-- Live Airdrop Claims & Snapshots
-- Upcoming / Live TGE Announcements
-- Incentivized Testnets, Mainnets, and Points Programs
-
-JSON Structure:
-[
-  {
-    "post_category": "AIRDROP_TGE",
-    "project_name": "Exact Project Name",
-    "domain": "official domain",
-    "niche_category": "DeFi / AI / Gaming / Layer 2 / Privacy",
-    "event_title": "Headline / Event Name (e.g., TGE Date Confirmed / Airdrop Claim Live)",
-    "series_round": "Funding Round if known (e.g., Series A / Strategic / Seed / Undisclosed)",
-    "funding_amount": "Amount raised if known or Undisclosed",
-    "total_funding": "Total raised or valuation if known",
-    "fresh_investors": "Lead / key investors involved if known",
-    "total_investors": "All backing VCs and funds if known",
-    "executive_summary": "2-3 precise sentences detailing the event, eligibility, and next steps.",
-    "official_link": "Direct announcement URL or official website"
-  }
-]
-Output ONLY raw JSON code block or [] if empty.
-"""
-        try:
-            res = self.key_manager.call_gemini_with_search(system_prompt, user_prompt)
-            json_str = self.extract_json(res)
-            data = json.loads(json_str)
-            return data if isinstance(data, list) else []
-        except Exception as e:
-            logging.error(f"Error in Global OSINT Pipeline: {str(e)}")
-            return []
-
-    def research_airdrop_whole_internet(self, project_name, domain):
-        """Deep research for direct claim portals or active participating subdomains"""
-        system_prompt = (
-            "You are an OSINT Researcher. Search official subdomains (app.*, testnet.*, claim.*, faucet.*), X/Twitter, and Galxe/Layer3 "
-            "for active direct participation or claim links for the given project."
-        )
-        user_prompt = f"""
-Search whole internet for project: {project_name} (Domain: {domain})
-
-JSON Format:
-{{
-  "has_active_airdrop": true,
-  "campaign_type": "Points Program / Incentivized Testnet / TGE Claim Portal / Mainnet Quest",
-  "airdrop_link": "Direct participation subdomain or official app/claim link"
-}}
-Output ONLY raw JSON code block.
-"""
-        try:
-            res = self.key_manager.call_gemini_with_search(system_prompt, user_prompt)
-            json_str = self.extract_json(res)
-            data = json.loads(json_str)
-            return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
-
-    def build_beautiful_telegram_post(self, item, airdrop_info, raw_link, official_link):
-        """Generates a complete, beautiful Telegram post rich in funding, investor, and event data."""
-        p_name = self.escape_html(clean_val(item.get("project_name"), "Web3 Project"))
-        category = item.get("post_category", "VC_FUNDING")
-        niche = self.escape_html(clean_val(item.get("niche_category"), "Web3 / Infrastructure"))
+    def build_beautiful_telegram_post(self, item, source_link, direct_link):
+        """Generates a clean Telegram post with Dynamic Header and NO Category lines."""
+        p_name = escape_html(clean_val(item.get("project_name"), "Web3 Project"))
+        e_title = escape_html(clean_val(item.get("event_title"), "Breaking Update"))
+        round_type = escape_html(clean_val(item.get("series_round"), "Institutional Phase"))
         
-        # Funding & Investor Details (Mandatory across ALL post types)
-        round_type = self.escape_html(clean_val(item.get("series_round"), "Strategic Round"))
-        amount = self.escape_html(clean_val(item.get("funding_amount"), "Undisclosed"))
-        total_funding = self.escape_html(clean_val(item.get("total_funding"), "Undisclosed"))
-        fresh_vcs = self.escape_html(clean_investor_list(item.get("fresh_investors")))
-        total_vcs = self.escape_html(clean_investor_list(item.get("total_investors")))
+        fresh_raised = escape_html(clean_val(item.get("fresh_funding"), "Undisclosed"))
+        total_raised = escape_html(clean_val(item.get("total_funding"), "Undisclosed"))
+        valuation = escape_html(clean_val(item.get("valuation"), "Undisclosed"))
         
-        # Summary & Event Info
-        summary = self.escape_html(clean_val(item.get("executive_summary"), "New institutional updates and ecosystem milestones announced."))
-        campaign_type = self.escape_html(clean_val(airdrop_info.get("campaign_type"), "Ecosystem Incentive / VC Round"))
-        
-        if category == "VC_FUNDING":
-            header = "💎 <b>NEW VC FUNDING & INSTITUTIONAL ALERT</b> 💎"
-            event_line = f"🎯 <b>Focus Stage:</b> <code>{campaign_type}</code>"
+        fresh_vcs = escape_html(clean_investor_list(item.get("fresh_investors")))
+        total_vcs = escape_html(clean_investor_list(item.get("total_investors")))
+        summary = escape_html(clean_val(item.get("executive_summary"), "New ecosystem milestone and institutional update recorded."))
+
+        # Dynamic Header Selection
+        check_text = (e_title + " " + round_type).lower()
+        if any(kw in check_text for kw in ["airdrop", "testnet", "quest", "claim", "points", "faucet"]):
+            header = "🚀 <b>LIVE AIRDROP & TESTNET ALERT</b> 🚀"
+        elif any(kw in check_text for kw in ["tge", "snapshot", "token launch", "listing"]):
+            header = "🔥 <b>BREAKING TGE & SNAPSHOT ALERT</b> 🔥"
         else:
-            event_title = self.escape_html(clean_val(item.get("event_title"), "Airdrop / TGE Update"))
-            header = "🚀 <b>LIVE AIRDROP / TGE BREAKING ALERT</b> 🚀"
-            event_line = f"⚡ <b>Event:</b> <code>{event_title}</code>\n🎯 <b>Campaign Type:</b> <code>{campaign_type}</code>"
+            header = "💎 <b>NEW VC FUNDING & INSTITUTIONAL ALERT</b> 💎"
 
-        # Links Construction
-        link_section = f"🔗 <b>Official Source:</b>\n<a href='{official_link}'><b>Verify Official Announcement</b></a>"
-        if is_valid_http_url(raw_link) and not any(x in raw_link for x in ["rootdata.com", "cryptorank.io"]):
-            link_section += f"\n\n🪂 <b>Direct Participation Portal:</b>\n<a href='{raw_link}'><b>Click Here to Participate / Claim</b></a>"
+        # Link section formatting
+        link_block = f"🔗 <b>Source Announcement:</b>\n<a href='{source_link}'><b>Verify Official Announcement</b></a>"
+        if direct_link != source_link and is_valid_http_url(direct_link):
+            link_block += f"\n\n🪂 <b>Official Direct Participation Link:</b>\n<a href='{direct_link}'><b>Click Here to Participate / Access</b></a>"
 
-        # Universal Rich Structure
+        # Final Clean Telegram Message Structure (No Category Line)
         post_content = (
             f"{header}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📌 <b>Project:</b> {p_name}\n"
-            f"🏷️ <b>Category:</b> <code>{niche}</code>\n"
-            f"{event_line}\n\n"
+            f"📢 <b>Event:</b> <code>{e_title}</code>\n\n"
             f"💰 <b>FUNDING & VALUATION</b>\n"
-            f"• <b>Round:</b> <code>{round_type}</code>\n"
-            f"• <b>Fresh Raised:</b> {amount}\n"
-            f"• <b>Total Capital Raised:</b> {total_funding}\n\n"
+            f"• <b>Stage / Round:</b> <code>{round_type}</code>\n"
+            f"• <b>Fresh Raised:</b> {fresh_raised}\n"
+            f"• <b>Total Capital Raised:</b> {total_raised}\n"
+            f"• <b>Valuation:</b> {valuation}\n\n"
             f"🤝 <b>KEY INVESTORS & BACKERS</b>\n"
             f"• <b>Fresh Investors:</b> {fresh_vcs}\n"
-            f"• <b>Total Backers:</b> {total_vcs}\n\n"
-            f"📝 <b>EXECUTIVE INSIGHTS</b>\n"
+            f"• <b>Total Investors:</b> {total_vcs}\n\n"
+            f"📝 <b>EXECUTIVE SUMMARY</b>\n"
             f"{summary}\n\n"
-            f"{link_section}\n"
+            f"{link_block}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🤖 <i>Powered by @AirdropHeadDepartment AI Engine</i>"
         )
@@ -504,32 +460,23 @@ Output ONLY raw JSON code block.
         match = re.search(r"(\[[\s\S]*\]|\{[\s\S]*\})", text)
         return match.group(1).strip() if match else text.strip()
 
-    @staticmethod
-    def escape_html(text):
-        if not text:
-            return "Undisclosed"
-        return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
 # =================================================================================
 # 🚀 MAIN EXECUTION ENGINE
 # =================================================================================
 
 def main():
     logging.info("=========================================================")
-    logging.info("🚀 STARTING SUPER POWERFUL WEB3 AUTOMATION SYSTEM 🚀")
+    logging.info("🚀 STARTING 100/100 PRODUCTION WEB3 AUTOMATION SYSTEM 🚀")
     logging.info("=========================================================")
 
     key_manager = GeminiAPIKeyManager(GEMINI_API_KEYS, MODEL_CANDIDATES)
     db = AlphaDatabase(DB_FILE)
     engine = GeminiAlphaEngine(key_manager, db)
 
-    # Clean up cache older than 24h
-    db.purge_24h_cache(hours=CACHE_PURGE_HOURS)
-    
-    # Execute Pipelines
+    # Execute Pipeline
     engine.execute_master_pipeline()
 
-    logging.info("✅ Execution completed successfully with zero repeat duplicates.")
+    logging.info("✅ Execution completed with smart event deduplication and clean dynamic formatting.")
 
 if __name__ == "__main__":
     main()
