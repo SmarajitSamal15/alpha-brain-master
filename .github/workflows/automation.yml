@@ -1,10 +1,10 @@
-name: Web3 Alpha & Funding Automation Bot
+name: Web3 Alpha Intelligence & News Bot
 
 on:
   schedule:
     # Runs automatically every 15 minutes
     - cron: '*/15 * * * *'
-  workflow_dispatch: # Allows manual execution anytime from GitHub UI
+  workflow_dispatch: # Allows manual trigger from GitHub UI anytime
 
 jobs:
   run-automation:
