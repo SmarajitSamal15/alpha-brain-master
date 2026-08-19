@@ -36,7 +36,7 @@ MODEL_CANDIDATES = [
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # =================================================================================
-# 🧰 HELPER UTILITIES
+# 🧰 HELPER UTILITIES & SMART SANITIZERS
 # =================================================================================
 
 def clean_val(val, fallback="Undisclosed"):
@@ -61,9 +61,9 @@ def is_valid_http_url(url):
         return False
 
 def clean_investor_list(investor_str):
-    """Deduplicate investor names cleanly and present concise, accurate lists."""
-    if not investor_str or str(investor_str).upper() in ["N/A", "NONE", "UNKNOWN", "UNDISCLOSED", ""]:
-        return "Institutional / Private Syndicate"
+    """Deduplicate investor names cleanly and ignore generic placeholder values."""
+    if not investor_str or str(investor_str).upper() in ["N/A", "NONE", "UNKNOWN", "UNDISCLOSED", "INSTITUTIONAL / PRIVATE SYNDICATE", ""]:
+        return "Undisclosed"
     
     raw_list = [item.strip() for item in str(investor_str).split(",") if item.strip()]
     seen = set()
@@ -75,29 +75,31 @@ def clean_investor_list(investor_str):
             seen.add(norm)
             deduped.append(item)
             
-    return ", ".join(deduped) if deduped else "Institutional / Private Syndicate"
+    return ", ".join(deduped) if deduped else "Undisclosed"
 
 def escape_html(text):
-    """Safely escape HTML entities for Telegram message dispatch."""
+    """Safely escape HTML entities for Telegram HTML parse mode to prevent 400 Bad Request crashes."""
     if not text:
         return "Undisclosed"
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-def generate_smart_event_hash(project_name, event_title, series_round):
+def generate_smart_event_hash(project_name, event_title, event_type):
     """
     Smart Event-Specific Hash:
     - Blocks exact duplicate posts for the SAME event.
     - ALLOWS different news updates for the SAME project.
     """
     norm_pname = normalize_text(project_name)
-    combined_text = f"{event_title} {series_round}".upper()
+    combined_text = f"{event_title} {event_type}".upper()
 
     milestone_keywords = []
     milestone_map = [
         ("MAINNET", ["MAINNET"]),
         ("TESTNET", ["TESTNET", "DEVNET", "FAUCET", "QUEST"]),
         ("AIRDROP_CLAIM", ["AIRDROP", "CLAIM", "ELIGIBILITY", "DISTRIBUTION"]),
-        ("TGE_SNAPSHOT", ["TGE", "SNAPSHOT", "TOKEN LAUNCH", "LISTING"]),
+        ("TGE_SNAPSHOT", ["TGE", "SNAPSHOT", "TOKEN LAUNCH"]),
+        ("LISTING", ["LISTING", "BINANCE", "COINBASE", "OKX", "BYBIT"]),
+        ("HACK", ["HACK", "EXPLOIT", "DRAIN", "ATTACK"]),
         ("SEED_ROUND", ["SEED"]),
         ("SERIES_A", ["SERIES A", "SERIES-A"]),
         ("SERIES_B", ["SERIES B", "SERIES-B"]),
@@ -114,6 +116,23 @@ def generate_smart_event_hash(project_name, event_title, series_round):
 
     event_signature = f"{norm_pname}_{'_'.join(sorted(set(milestone_keywords)))}"
     return hashlib.md5(event_signature.encode()).hexdigest()
+
+def detect_link_label(url):
+    """Intelligently detect source website domain to give human-readable anchor labels."""
+    if not url or not isinstance(url, str):
+        return "Verify Official Announcement"
+    domain = urlparse(url).netloc.lower()
+    if "x.com" in domain or "twitter.com" in domain:
+        return "Verify Official X (Twitter) Post"
+    elif "rootdata.com" in domain:
+        return "Verify RootData Analytics Page"
+    elif "cryptorank.io" in domain:
+        return "Verify CryptoRank Listing Page"
+    elif "mirror.xyz" in domain or "medium.com" in domain:
+        return "Read Official Article Announcement"
+    elif "binance.com" in domain or "bybit.com" in domain or "okx.com" in domain:
+        return "Verify Exchange Official Notice"
+    return "Verify Official Announcement"
 
 # =================================================================================
 # 🔄 MULTI-KEY FAILOVER GEMINI MANAGER
@@ -291,7 +310,7 @@ class GeminiAlphaEngine:
 
                 p_name = clean_val(item.get("project_name"))
                 e_title = clean_val(item.get("event_title"))
-                round_type = clean_val(item.get("series_round"))
+                event_type = clean_val(item.get("event_type"), "GENERAL_NEWS")
 
                 if p_name.upper() in ["UNDISCLOSED", "N/A", "NONE", "UNKNOWN"]:
                     continue
@@ -300,7 +319,7 @@ class GeminiAlphaEngine:
                 if not norm_pname:
                     continue
 
-                unique_hash = generate_smart_event_hash(p_name, e_title, round_type)
+                unique_hash = generate_smart_event_hash(p_name, e_title, event_type)
 
                 if unique_hash in seen_in_run or self.db.is_hash_sent(unique_hash):
                     logging.info(f"⏭️ Skipping duplicate event for project: {p_name} | {e_title}")
@@ -326,17 +345,19 @@ class GeminiAlphaEngine:
                 continue
 
     def fetch_fresh_web3_intelligence_12h(self):
-        """Scans RootData, CryptoRank, Crypto-Fundraising, RSS Feeds, X, and Web for fresh 12h Web3 News."""
+        """Scans RootData, CryptoRank, Crypto-Fundraising, RSS Feeds, X, and Web for all 12h Web3 News."""
         system_prompt = (
             "You are an Elite Web3 Intelligence Specialist. Search RootData (rootdata.com), CryptoRank (cryptorank.io), "
             "Crypto-Fundraising (crypto-fundraising.info), Web3 RSS feeds, Mirror, X/Twitter, and global web sources "
-            "STRICTLY for breaking Web3 news, fresh funding rounds, live airdrops, TGEs, snapshots, and incentivized testnets announced within the LAST 12 HOURS.\n\n"
+            "STRICTLY for breaking Web3 news, fresh funding rounds, live airdrops, TGEs, snapshots, incentivized testnets, "
+            "token listings, mainnet upgrades, protocol hacks, and major industry updates announced within the LAST 12 HOURS.\n\n"
             "CRITICAL MANDATES:\n"
             "1. Output exact, grammatically flawless, and technically precise word-for-word information.\n"
-            "2. Separate 'fresh_funding' (Fresh Raised in this round), 'total_funding' (Total Capital Raised historically), and 'valuation' cleanly into distinct JSON keys.\n"
-            "3. Separate 'fresh_investors' (lead/fresh round backers) and 'total_investors' (all historic backers).\n"
-            "4. Provide 'official_direct_link' (action portal, claim link, app, or testnet) AND 'source_link' (official announcement, tweet, or RootData link).\n"
-            "5. OUTPUT ONLY VALID JSON CODE BLOCK OR []. DO NOT ADD ANY INTRODUCTORY OR CONVERSATIONAL TEXT."
+            "2. Strictly classify 'event_type' into ONE of: ['VC_FUNDING', 'AIRDROP_TESTNET', 'TGE_SNAPSHOT', 'TOKEN_LISTING', 'MAINNET_UPGRADE', 'SECURITY_ALERT', 'GENERAL_NEWS'].\n"
+            "3. Separate 'fresh_funding', 'total_funding', and 'valuation' cleanly into distinct JSON keys.\n"
+            "4. Separate 'fresh_investors' and 'total_investors'.\n"
+            "5. Provide 'official_direct_link' AND 'source_link'.\n"
+            "6. OUTPUT ONLY VALID JSON CODE BLOCK OR []."
         )
         user_prompt = """
 Search RootData, CryptoRank, Crypto-Fundraising, RSS feeds, and the whole Internet for breaking Web3 announcements from the LAST 12 HOURS.
@@ -345,13 +366,14 @@ JSON Output Schema:
 [
   {
     "project_name": "Exact Project Name",
-    "event_title": "Short Descriptive Event Title (e.g., $15M Series A Raised / TGE Date Confirmed / Airdrop Claim Portal Live)",
-    "series_round": "Seed / Series A / Strategic / TGE / Airdrop Claim",
+    "event_title": "Short Descriptive Event Title (e.g., $15M Series A Raised / TGE Date Confirmed / Mainnet Launch / Airdrop Live / Binance Listing)",
+    "event_type": "VC_FUNDING | AIRDROP_TESTNET | TGE_SNAPSHOT | TOKEN_LISTING | MAINNET_UPGRADE | SECURITY_ALERT | GENERAL_NEWS",
+    "series_round": "Seed / Series A / Strategic / TGE / Mainnet / Undisclosed",
     "fresh_funding": "$XX M or Undisclosed",
     "total_funding": "$XX M or Undisclosed",
     "valuation": "$XX M or Undisclosed",
-    "fresh_investors": "Comma separated fresh round investors",
-    "total_investors": "Comma separated all historical backers",
+    "fresh_investors": "Comma separated fresh round investors or Undisclosed",
+    "total_investors": "Comma separated all historical backers or Undisclosed",
     "official_direct_link": "Direct participation subdomain, claim portal, testnet link, or official site",
     "source_link": "Direct official announcement URL, tweet, or RootData page",
     "executive_summary": "2-3 precise sentences detailing project utility, event scope, and immediate action steps."
@@ -369,10 +391,11 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
             return []
 
     def build_beautiful_telegram_post(self, item, source_link, direct_link):
-        """Generates a clean Telegram post with Dynamic Header and NO Category lines."""
+        """Generates a clean Telegram post with Adaptive Layout (Computer Brain Logic)."""
         p_name = escape_html(clean_val(item.get("project_name"), "Web3 Project"))
         e_title = escape_html(clean_val(item.get("event_title"), "Breaking Update"))
-        round_type = escape_html(clean_val(item.get("series_round"), "Institutional Phase"))
+        round_type = escape_html(clean_val(item.get("series_round"), "Milestone Phase"))
+        event_type = str(item.get("event_type", "GENERAL_NEWS")).upper()
         
         fresh_raised = escape_html(clean_val(item.get("fresh_funding"), "Undisclosed"))
         total_raised = escape_html(clean_val(item.get("total_funding"), "Undisclosed"))
@@ -382,15 +405,56 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
         total_vcs = escape_html(clean_investor_list(item.get("total_investors")))
         summary = escape_html(clean_val(item.get("executive_summary"), "New ecosystem milestone and institutional update recorded."))
 
-        check_text = (e_title + " " + round_type).lower()
-        if any(kw in check_text for kw in ["airdrop", "testnet", "quest", "claim", "points", "faucet"]):
-            header = "🚀 <b>LIVE AIRDROP & TESTNET ALERT</b> 🚀"
-        elif any(kw in check_text for kw in ["tge", "snapshot", "token launch", "listing"]):
-            header = "🔥 <b>BREAKING TGE & SNAPSHOT ALERT</b> 🔥"
-        else:
-            header = "💎 <b>NEW VC FUNDING & INSTITUTIONAL ALERT</b> 💎"
+        # 7 Granular Dynamic Header Classifications
+        check_text = (e_title + " " + round_type + " " + event_type).lower()
 
-        link_block = f"🔗 <b>Source Announcement:</b>\n<a href='{source_link}'><b>Verify Official Announcement</b></a>"
+        if "security" in check_text or "hack" in check_text or "exploit" in check_text or event_type == "SECURITY_ALERT":
+            header = "🚨 <b>WEB3 SECURITY & HACK ALERT</b> 🚨"
+            is_vc_post = False
+
+        elif "listing" in check_text or event_type == "TOKEN_LISTING":
+            header = "📈 <b>MAJOR TOKEN LISTING ALERT</b> 📈"
+            is_vc_post = False
+
+        elif "mainnet" in check_text or "upgrade" in check_text or event_type == "MAINNET_UPGRADE":
+            header = "⚙️ <b>MAINNET & PROTOCOL UPGRADE ALERT</b> ⚙️"
+            is_vc_post = False
+
+        elif any(kw in check_text for kw in ["airdrop", "testnet", "quest", "claim", "points", "faucet"]) or event_type == "AIRDROP_TESTNET":
+            header = "🚀 <b>LIVE AIRDROP & TESTNET ALERT</b> 🚀"
+            is_vc_post = False
+
+        elif any(kw in check_text for kw in ["tge", "snapshot", "token launch"]) or event_type == "TGE_SNAPSHOT":
+            header = "🔥 <b>BREAKING TGE & SNAPSHOT ALERT</b> 🔥"
+            is_vc_post = False
+
+        elif any(kw in check_text for kw in ["seed", "series", "raised", "funding", "valuation", "vc"]) or event_type == "VC_FUNDING":
+            header = "💎 <b>NEW VC FUNDING & INSTITUTIONAL ALERT</b> 💎"
+            is_vc_post = True
+
+        else:
+            header = "⚡ <b>BREAKING WEB3 NEWS ALERT</b> ⚡"
+            is_vc_post = False
+
+        # COMPUTER BRAIN LOGIC: Smart Adaptive Funding Block Rendering
+        # Show funding block if it's explicitly a VC post OR if real financial data actually exists
+        has_real_financial_data = any(val != "Undisclosed" for val in [fresh_raised, total_raised, valuation, fresh_vcs, total_vcs])
+        
+        funding_section = ""
+        if is_vc_post or has_real_financial_data:
+            funding_section = (
+                f"💰 <b>FUNDING & VALUATION</b>\n"
+                f"• <b>Stage / Round:</b> <code>{round_type}</code>\n"
+                f"• <b>Fresh Raised:</b> {fresh_raised}\n"
+                f"• <b>Total Capital Raised:</b> {total_raised}\n"
+                f"• <b>Valuation:</b> {valuation}\n\n"
+                f"🤝 <b>KEY INVESTORS & BACKERS</b>\n"
+                f"• <b>Fresh Investors:</b> {fresh_vcs}\n"
+                f"• <b>Total Investors:</b> {total_vcs}\n\n"
+            )
+
+        source_label = detect_link_label(source_link)
+        link_block = f"🔗 <b>Source Announcement:</b>\n<a href='{source_link}'><b>{source_label}</b></a>"
         if direct_link != source_link and is_valid_http_url(direct_link):
             link_block += f"\n\n🪂 <b>Official Direct Participation Link:</b>\n<a href='{direct_link}'><b>Click Here to Participate / Access</b></a>"
 
@@ -399,14 +463,7 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"📌 <b>Project:</b> {p_name}\n"
             f"📢 <b>Event:</b> <code>{e_title}</code>\n\n"
-            f"💰 <b>FUNDING & VALUATION</b>\n"
-            f"• <b>Stage / Round:</b> <code>{round_type}</code>\n"
-            f"• <b>Fresh Raised:</b> {fresh_raised}\n"
-            f"• <b>Total Capital Raised:</b> {total_raised}\n"
-            f"• <b>Valuation:</b> {valuation}\n\n"
-            f"🤝 <b>KEY INVESTORS & BACKERS</b>\n"
-            f"• <b>Fresh Investors:</b> {fresh_vcs}\n"
-            f"• <b>Total Investors:</b> {total_vcs}\n\n"
+            f"{funding_section}"
             f"📝 <b>EXECUTIVE SUMMARY</b>\n"
             f"{summary}\n\n"
             f"{link_block}\n"
