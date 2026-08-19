@@ -86,13 +86,12 @@ def escape_html(text):
 def generate_smart_event_hash(project_name, event_title, series_round):
     """
     Smart Event-Specific Hash:
-    - Blocks exact duplicate posts for the SAME event (e.g. 'Mainnet Scheduled' vs 'Mainnet Confirmed').
-    - ALLOWS different news updates for the SAME project (e.g. 'Zamica Funding Raised' vs 'Zamica Mainnet Launch').
+    - Blocks exact duplicate posts for the SAME event.
+    - ALLOWS different news updates for the SAME project.
     """
     norm_pname = normalize_text(project_name)
     combined_text = f"{event_title} {series_round}".upper()
 
-    # Extract event category milestone
     milestone_keywords = []
     milestone_map = [
         ("MAINNET", ["MAINNET"]),
@@ -110,7 +109,6 @@ def generate_smart_event_hash(project_name, event_title, series_round):
             milestone_keywords.append(label)
 
     if not milestone_keywords:
-        # Fallback to normalized title prefix if no distinct keyword match
         clean_title = normalize_text(event_title)[:12]
         milestone_keywords.append(clean_title)
 
@@ -302,7 +300,6 @@ class GeminiAlphaEngine:
                 if not norm_pname:
                     continue
 
-                # Generate Smart Event Hash: Stops duplicate same-event posts while allowing distinct new updates for the project
                 unique_hash = generate_smart_event_hash(p_name, e_title, round_type)
 
                 if unique_hash in seen_in_run or self.db.is_hash_sent(unique_hash):
@@ -311,7 +308,6 @@ class GeminiAlphaEngine:
 
                 seen_in_run.add(unique_hash)
 
-                # Direct & Source links validation
                 source_link = clean_val(item.get("source_link"), "https://rootdata.com")
                 direct_link = clean_val(item.get("official_direct_link"), source_link)
 
@@ -320,7 +316,6 @@ class GeminiAlphaEngine:
                 if not is_valid_http_url(direct_link):
                     direct_link = source_link
 
-                # Render Clean Telegram HTML Post
                 message = self.build_beautiful_telegram_post(item, source_link, direct_link)
 
                 if self.send_telegram_retry_safe(message):
@@ -340,7 +335,8 @@ class GeminiAlphaEngine:
             "1. Output exact, grammatically flawless, and technically precise word-for-word information.\n"
             "2. Separate 'fresh_funding' (Fresh Raised in this round), 'total_funding' (Total Capital Raised historically), and 'valuation' cleanly into distinct JSON keys.\n"
             "3. Separate 'fresh_investors' (lead/fresh round backers) and 'total_investors' (all historic backers).\n"
-            "4. Provide 'official_direct_link' (action portal, claim link, app, or testnet) AND 'source_link' (official announcement, tweet, or RootData link)."
+            "4. Provide 'official_direct_link' (action portal, claim link, app, or testnet) AND 'source_link' (official announcement, tweet, or RootData link).\n"
+            "5. OUTPUT ONLY VALID JSON CODE BLOCK OR []. DO NOT ADD ANY INTRODUCTORY OR CONVERSATIONAL TEXT."
         )
         user_prompt = """
 Search RootData, CryptoRank, Crypto-Fundraising, RSS feeds, and the whole Internet for breaking Web3 announcements from the LAST 12 HOURS.
@@ -386,7 +382,6 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
         total_vcs = escape_html(clean_investor_list(item.get("total_investors")))
         summary = escape_html(clean_val(item.get("executive_summary"), "New ecosystem milestone and institutional update recorded."))
 
-        # Dynamic Header Selection
         check_text = (e_title + " " + round_type).lower()
         if any(kw in check_text for kw in ["airdrop", "testnet", "quest", "claim", "points", "faucet"]):
             header = "🚀 <b>LIVE AIRDROP & TESTNET ALERT</b> 🚀"
@@ -395,12 +390,10 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
         else:
             header = "💎 <b>NEW VC FUNDING & INSTITUTIONAL ALERT</b> 💎"
 
-        # Link section formatting
         link_block = f"🔗 <b>Source Announcement:</b>\n<a href='{source_link}'><b>Verify Official Announcement</b></a>"
         if direct_link != source_link and is_valid_http_url(direct_link):
             link_block += f"\n\n🪂 <b>Official Direct Participation Link:</b>\n<a href='{direct_link}'><b>Click Here to Participate / Access</b></a>"
 
-        # Final Clean Telegram Message Structure (No Category Line)
         post_content = (
             f"{header}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -453,12 +446,15 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
 
     @staticmethod
     def extract_json(text):
+        """Robustly extract JSON block or fallback to empty JSON array to prevent crash."""
         if not text:
             return "[]"
         text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
         text = re.sub(r"\s*```$", "", text.strip())
         match = re.search(r"(\[[\s\S]*\]|\{[\s\S]*\})", text)
-        return match.group(1).strip() if match else text.strip()
+        if match:
+            return match.group(1).strip()
+        return "[]"
 
 # =================================================================================
 # 🚀 MAIN EXECUTION ENGINE
