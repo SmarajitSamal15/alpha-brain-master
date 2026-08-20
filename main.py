@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import html
 import sqlite3
 import logging
 import hashlib
@@ -81,7 +82,7 @@ def escape_html(text):
     """Safely escape HTML entities for Telegram HTML parse mode to prevent 400 Bad Request crashes."""
     if not text:
         return "Undisclosed"
-    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return html.escape(str(text))
 
 def generate_smart_event_hash(project_name, event_title, event_type):
     """
@@ -90,7 +91,7 @@ def generate_smart_event_hash(project_name, event_title, event_type):
     - ALLOWS different news updates for the SAME project.
     """
     norm_pname = normalize_text(project_name)
-    combined_text = f"{event_title} {event_type}".upper()
+    combined_text = f" {event_title} {event_type} ".upper()
 
     milestone_keywords = []
     milestone_map = [
@@ -98,7 +99,7 @@ def generate_smart_event_hash(project_name, event_title, event_type):
         ("AIRDROP_CLAIM", ["AIRDROP", "CLAIM", "ELIGIBILITY", "DISTRIBUTION"]),
         ("TGE_SNAPSHOT", ["TGE", "SNAPSHOT", "TOKEN LAUNCH", "LAUNCHPAD", "LAUNCHPOOL", "IEO", "IDO"]),
         ("PRE_SEED", ["PRE-SEED", "PRE SEED"]),
-        ("SEED_ROUND", ["SEED"]),
+        ("SEED_ROUND", [" SEED ", "SEED ROUND"]),
         ("SERIES_A", ["SERIES A", "SERIES-A"]),
         ("SERIES_B", ["SERIES B", "SERIES-B"]),
         ("SERIES_C", ["SERIES C", "SERIES-C"]),
@@ -179,7 +180,7 @@ class GeminiAPIKeyManager:
             payload = {
                 "contents": [{"parts": [{"text": user_prompt}]}],
                 "systemInstruction": {"parts": [{"text": system_prompt}]},
-                "tools": [{"googleSearch": {}}],
+                "tools": [{"google_search": {}}],
                 "generationConfig": {"temperature": temperature}
             }
 
@@ -432,15 +433,18 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
                 f"• <b>Total Investors:</b> {total_vcs}\n\n"
             )
 
-        source_label = detect_link_label(source_link)
+        source_label = escape_html(detect_link_label(source_link))
+
+        safe_source_link = html.escape(source_link, quote=True)
+        safe_direct_link = html.escape(direct_link, quote=True)
 
         # LINK LOGIC ENFORCEMENT: VC Funding posts contain ONLY 1 source link. Airdrop/TGE posts contain BOTH links if available.
         if is_vc_post:
-            link_block = f"🔗 <b>Source Announcement:</b>\n<a href='{source_link}'><b>{source_label}</b></a>"
+            link_block = f"🔗 <b>Source Announcement:</b>\n<a href='{safe_source_link}'><b>{source_label}</b></a>"
         else:
-            link_block = f"🔗 <b>Source Announcement:</b>\n<a href='{source_link}'><b>{source_label}</b></a>"
+            link_block = f"🔗 <b>Source Announcement:</b>\n<a href='{safe_source_link}'><b>{source_label}</b></a>"
             if direct_link != source_link and is_valid_http_url(direct_link):
-                link_block += f"\n\n🪂 <b>Official Direct Participation Link:</b>\n<a href='{direct_link}'><b>Click Here to Participate / Access</b></a>"
+                link_block += f"\n\n🪂 <b>Official Direct Participation Link:</b>\n<a href='{safe_direct_link}'><b>Click Here to Participate / Access</b></a>"
 
         post_content = (
             f"{header}\n"
@@ -478,6 +482,9 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
                 elif res.status_code == 429:
                     retry_after = int(res.json().get("parameters", {}).get("retry_after", 5))
                     time.sleep(retry_after)
+                elif res.status_code == 400:
+                    logging.error(f"❌ Telegram Parse Error (400): {res.text}")
+                    return False
                 else:
                     time.sleep(2)
             except Exception as e:
