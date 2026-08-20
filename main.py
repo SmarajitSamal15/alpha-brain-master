@@ -348,6 +348,7 @@ class GeminiAlphaEngine:
             "2. Confirmed TGE Dates, Snapshot Announcements, Eligibility Verification, and Token Claim Portals\n"
             "3. Fresh VC Funding Rounds (Seed, Series A/B, Strategic, Private Capital)\n\n"
             "CRITICAL STRICT MANDATES:\n"
+            "- Ensure ALL JSON fields (project_name, event_title, executive_summary, series_round, investors) are written in grammatically flawless, highly professional, and technically accurate English.\n"
             "- IGNORE & EXCLUDE all general market news, token exchange listings (Binance/Coinbase listings), partnerships, "
             "protocol hacks/exploits, governance votes, macro economy, and routine mainnet software upgrades.\n"
             "- ONLY return actionable high-alpha events strictly related to AIRDROPS, TESTNETS, TGEs, SNAPSHOTS, and VC FUNDING announced within the LAST 12 HOURS.\n"
@@ -360,18 +361,18 @@ Search RootData, CryptoRank, Crypto-Fundraising, RSS feeds, and X/Twitter for br
 JSON Output Schema:
 [
   {
-    "project_name": "Exact Project Name",
-    "event_title": "Short Descriptive Event Title (e.g., $15M Series A Raised / TGE Date Confirmed / Testnet Live / Airdrop Claim Portal Live)",
+    "project_name": "Exact Official Project Name",
+    "event_title": "Short Descriptive Event Title in Flawless Grammar (e.g., $15M Series A Raised / TGE Date Confirmed / Testnet Phase 2 Live / Airdrop Claim Portal Open)",
     "event_type": "VC_FUNDING | AIRDROP_TESTNET | TGE_SNAPSHOT",
     "series_round": "Seed / Series A / Strategic / TGE / Testnet / Undisclosed",
     "fresh_funding": "$XX M or Undisclosed",
     "total_funding": "$XX M or Undisclosed",
     "valuation": "$XX M or Undisclosed",
-    "fresh_investors": "Comma separated fresh round investors or Undisclosed",
+    "fresh_investors": "Comma separated fresh round lead/co-investors or Undisclosed",
     "total_investors": "Comma separated all historical backers or Undisclosed",
-    "official_direct_link": "Direct participation subdomain, claim portal, testnet link, or official site",
-    "source_link": "Direct official announcement URL, tweet, or RootData page",
-    "executive_summary": "2-3 precise sentences detailing project utility, event scope, and immediate action steps."
+    "official_direct_link": "Direct participation link, claim portal, testnet app, or official website",
+    "source_link": "Direct official announcement URL, X post, or RootData page",
+    "executive_summary": "2-3 precise sentences written with flawless grammar detailing project utility, round details/event scope, and immediate action steps."
   }
 ]
 Return ONLY a valid JSON array block or [] if no fresh data found.
@@ -386,38 +387,34 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
             return []
 
     def build_beautiful_telegram_post(self, item, source_link, direct_link):
-        """Generates a clean Telegram post with 3 Core Dynamic Headers."""
+        """Generates a clean Telegram post with dynamic headers and strict link rendering rules."""
         p_name = escape_html(clean_val(item.get("project_name"), "Web3 Project"))
         e_title = escape_html(clean_val(item.get("event_title"), "Breaking Update"))
         round_type = escape_html(clean_val(item.get("series_round"), "Milestone Phase"))
         event_type = str(item.get("event_type", "AIRDROP_TESTNET")).upper()
-        
+
         fresh_raised = escape_html(clean_val(item.get("fresh_funding"), "Undisclosed"))
         total_raised = escape_html(clean_val(item.get("total_funding"), "Undisclosed"))
         valuation = escape_html(clean_val(item.get("valuation"), "Undisclosed"))
-        
+
         fresh_vcs = escape_html(clean_investor_list(item.get("fresh_investors")))
         total_vcs = escape_html(clean_investor_list(item.get("total_investors")))
         summary = escape_html(clean_val(item.get("executive_summary"), "New ecosystem milestone and institutional update recorded."))
 
-        # 3 Core Dynamic Header Classifications
         check_text = (e_title + " " + round_type + " " + event_type).lower()
 
         if any(kw in check_text for kw in ["tge", "snapshot", "token launch"]) or event_type == "TGE_SNAPSHOT":
             header = "🔥 <b>BREAKING TGE & SNAPSHOT ALERT</b> 🔥"
             is_vc_post = False
-
         elif any(kw in check_text for kw in ["seed", "series", "raised", "funding", "valuation", "vc"]) or event_type == "VC_FUNDING":
             header = "💎 <b>NEW VC FUNDING & INSTITUTIONAL ALERT</b> 💎"
             is_vc_post = True
-
         else:
             header = "🚀 <b>LIVE AIRDROP & TESTNET ALERT</b> 🚀"
             is_vc_post = False
 
-        # Smart Adaptive Funding Block Rendering
         has_real_financial_data = any(val != "Undisclosed" for val in [fresh_raised, total_raised, valuation, fresh_vcs, total_vcs])
-        
+
         funding_section = ""
         if is_vc_post or has_real_financial_data:
             funding_section = (
@@ -432,9 +429,14 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
             )
 
         source_label = detect_link_label(source_link)
-        link_block = f"🔗 <b>Source Announcement:</b>\n<a href='{source_link}'><b>{source_label}</b></a>"
-        if direct_link != source_link and is_valid_http_url(direct_link):
-            link_block += f"\n\n🪂 <b>Official Direct Participation Link:</b>\n<a href='{direct_link}'><b>Click Here to Participate / Access</b></a>"
+
+        # LINK LOGIC ENFORCEMENT: VC Funding posts contain ONLY 1 source link. Airdrop/TGE posts contain BOTH links if available.
+        if is_vc_post:
+            link_block = f"🔗 <b>Source Announcement:</b>\n<a href='{source_link}'><b>{source_label}</b></a>"
+        else:
+            link_block = f"🔗 <b>Source Announcement:</b>\n<a href='{source_link}'><b>{source_label}</b></a>"
+            if direct_link != source_link and is_valid_http_url(direct_link):
+                link_block += f"\n\n🪂 <b>Official Direct Participation Link:</b>\n<a href='{direct_link}'><b>Click Here to Participate / Access</b></a>"
 
         post_content = (
             f"{header}\n"
@@ -462,7 +464,7 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
             "parse_mode": "HTML",
             "disable_web_page_preview": True
         }
-        
+
         for attempt in range(3):
             try:
                 res = requests.post(url, json=payload, timeout=12)
