@@ -7,7 +7,7 @@ import logging
 import hashlib
 import requests
 from urllib.parse import urlparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # =================================================================================
 # ⚙️ SECURE ENVIRONMENT & SYSTEM CONFIGURATION
@@ -96,11 +96,14 @@ def generate_smart_event_hash(project_name, event_title, event_type):
     milestone_map = [
         ("TESTNET", ["TESTNET", "DEVNET", "FAUCET", "QUEST"]),
         ("AIRDROP_CLAIM", ["AIRDROP", "CLAIM", "ELIGIBILITY", "DISTRIBUTION"]),
-        ("TGE_SNAPSHOT", ["TGE", "SNAPSHOT", "TOKEN LAUNCH"]),
+        ("TGE_SNAPSHOT", ["TGE", "SNAPSHOT", "TOKEN LAUNCH", "LAUNCHPAD", "LAUNCHPOOL", "IEO", "IDO"]),
+        ("PRE_SEED", ["PRE-SEED", "PRE SEED"]),
         ("SEED_ROUND", ["SEED"]),
         ("SERIES_A", ["SERIES A", "SERIES-A"]),
         ("SERIES_B", ["SERIES B", "SERIES-B"]),
-        ("STRATEGIC_ROUND", ["STRATEGIC", "PRIVATE SALE", "RAISED"]),
+        ("SERIES_C", ["SERIES C", "SERIES-C"]),
+        ("SERIES_D_PLUS", ["SERIES D", "SERIES-D", "SERIES E", "SERIES-E"]),
+        ("STRATEGIC_ROUND", ["STRATEGIC", "PRIVATE SALE", "EXTENSION", "RAISED"]),
     ]
 
     for label, keywords in milestone_map:
@@ -258,7 +261,7 @@ class AlphaDatabase:
     def mark_hash_sent(self, project_name, unique_hash):
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            now_str = datetime.utcnow().isoformat()
+            now_str = datetime.now(timezone.utc).isoformat()
             cursor.execute("""
                 INSERT OR IGNORE INTO sent_history (project_name, unique_hash, sent_at)
                 VALUES (?, ?, ?)
@@ -267,7 +270,7 @@ class AlphaDatabase:
 
     def purge_expired_data(self, hours=24):
         """Purge data older than 24 hours to prevent DB bloat."""
-        cutoff_str = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        cutoff_str = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM sent_history WHERE sent_at < ?", (cutoff_str,))
@@ -345,12 +348,13 @@ class GeminiAlphaEngine:
             "You are an Elite Crypto Airdrop & VC Intelligence Specialist. Search RootData (rootdata.com), CryptoRank (cryptorank.io), "
             "Crypto-Fundraising (crypto-fundraising.info), Web3 RSS feeds, Mirror, and X/Twitter STRICTLY for:\n"
             "1. Live/Incentivized Airdrops, Points Programs, Quests, Faucets, and Testnets\n"
-            "2. Confirmed TGE Dates, Snapshot Announcements, Eligibility Verification, and Token Claim Portals\n"
-            "3. Fresh VC Funding Rounds (Seed, Series A/B, Strategic, Private Capital)\n\n"
+            "2. Confirmed TGE Dates, Initial Token Launch Debuts (including Launchpools, Launchpads, and initial CEX/DEX listings on Binance, Coinbase, OKX, Bybit, Bitget, Gate.io, KuCoin, MEXC, Uniswap, Raydium), Snapshot Announcements, Eligibility Verification, and Token Claim Portals\n"
+            "3. Fresh VC Funding Rounds (Pre-Seed, Seed, Series A/B/C/D, Strategic, Private Capital)\n\n"
             "CRITICAL STRICT MANDATES:\n"
-            "- Ensure ALL JSON fields (project_name, event_title, executive_summary, series_round, investors) are written in grammatically flawless, highly professional, and technically accurate English.\n"
-            "- IGNORE & EXCLUDE all general market news, token exchange listings (Binance/Coinbase listings), partnerships, "
-            "protocol hacks/exploits, governance votes, macro economy, and routine mainnet software upgrades.\n"
+            "- ALLOW primary TGE (Token Generation Events) and initial token launch announcements across ALL CEX/DEX exchanges.\n"
+            "- IGNORE & EXCLUDE routine secondary exchange listings for tokens that are already circulating in the market.\n"
+            "- IGNORE & EXCLUDE general market price news, protocol hacks/exploits, governance votes, macro economy, and routine software upgrades.\n"
+            "- Ensure ALL JSON fields are written in grammatically flawless, highly professional, and technically accurate English.\n"
             "- ONLY return actionable high-alpha events strictly related to AIRDROPS, TESTNETS, TGEs, SNAPSHOTS, and VC FUNDING announced within the LAST 12 HOURS.\n"
             "- Classify 'event_type' strictly into ONE of: ['VC_FUNDING', 'AIRDROP_TESTNET', 'TGE_SNAPSHOT'].\n"
             "- OUTPUT ONLY VALID JSON CODE BLOCK OR []."
@@ -362,9 +366,9 @@ JSON Output Schema:
 [
   {
     "project_name": "Exact Official Project Name",
-    "event_title": "Short Descriptive Event Title in Flawless Grammar (e.g., $15M Series A Raised / TGE Date Confirmed / Testnet Phase 2 Live / Airdrop Claim Portal Open)",
+    "event_title": "Short Descriptive Event Title in Flawless Grammar (e.g., $15M Series A Raised / Initial TGE & Binance Launchpool Confirmed / Testnet Phase 2 Live / Airdrop Claim Portal Open)",
     "event_type": "VC_FUNDING | AIRDROP_TESTNET | TGE_SNAPSHOT",
-    "series_round": "Seed / Series A / Strategic / TGE / Testnet / Undisclosed",
+    "series_round": "Pre-Seed / Seed / Series A / Series B / Series C / Series D / Strategic / TGE / Testnet / Undisclosed",
     "fresh_funding": "$XX M or Undisclosed",
     "total_funding": "$XX M or Undisclosed",
     "valuation": "$XX M or Undisclosed",
@@ -403,7 +407,7 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
 
         check_text = (e_title + " " + round_type + " " + event_type).lower()
 
-        if any(kw in check_text for kw in ["tge", "snapshot", "token launch"]) or event_type == "TGE_SNAPSHOT":
+        if any(kw in check_text for kw in ["tge", "snapshot", "token launch", "launchpool", "launchpad"]) or event_type == "TGE_SNAPSHOT":
             header = "🔥 <b>BREAKING TGE & SNAPSHOT ALERT</b> 🔥"
             is_vc_post = False
         elif any(kw in check_text for kw in ["seed", "series", "raised", "funding", "valuation", "vc"]) or event_type == "VC_FUNDING":
