@@ -1,22 +1,20 @@
-name: Web3 Alpha Telegram Bot (15 Min Trigger)
+name: Ultimate Web3 Alpha Bot Automation
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Auto-triggers every 15 minutes
-  workflow_dispatch:        # Manual trigger button in GitHub Actions UI
+    # Runs automatically every 15 minutes
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # Allows manual run button anytime from GitHub UI
 
 jobs:
-  run-alpha-bot:
+  execute-bot:
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: write       # Required to write and commit database changes
 
     steps:
       - name: Checkout Repository Code
         uses: actions/checkout@v4
 
-      - name: Setup Python Environment
+      - name: Set up Python Environment
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
@@ -26,17 +24,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
-      - name: Execute Main Bot Script
+      - name: Run Web3 Alpha Engine Script
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-        run: python main.py
-
-      - name: Auto-Commit & Save Updated Database
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add alpha_brain_master.db
-          git commit -m "auto: save updated duplicate cache db" || exit 0
-          git push
+          python main.py
+
+      - name: Persist SQLite Database History (Prevent Duplicate Posts)
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update database history [skip ci]"
+          file_pattern: "alpha_brain_master.db"
