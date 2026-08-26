@@ -29,10 +29,11 @@ TIME_WINDOW_HOURS = 12
 CACHE_PURGE_HOURS = 24
 MIN_SCORE_THRESHOLD = 65  # Minimum score out of 100 to trigger alert
 
+# Standard Gemini API Models
 MODEL_CANDIDATES = [
-    "gemini-2.5-flash",
+    "gemini-1.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-flash"
+    "gemini-1.5-pro"
 ]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -86,11 +87,7 @@ def escape_html(text):
     return html.escape(str(text))
 
 def generate_smart_event_hash(project_name, event_title, event_type):
-    """
-    Smart Event-Specific Hash:
-    - Blocks exact duplicate posts for the SAME event.
-    - ALLOWS different news updates for the SAME project.
-    """
+    """Smart Event-Specific Hash."""
     norm_pname = normalize_text(project_name)
     combined_text = f" {event_title} {event_type} ".upper()
 
@@ -179,13 +176,14 @@ class GeminiAPIKeyManager:
 
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent?key={current_key}"
             headers = {"Content-Type": "application/json"}
+            
+            # Removed conflicting response_mime_type when googleSearch tool is enabled
             payload = {
                 "contents": [{"parts": [{"text": user_prompt}]}],
                 "systemInstruction": {"parts": [{"text": system_prompt}]},
                 "tools": [{"googleSearch": {}}],
                 "generationConfig": {
-                    "temperature": temperature,
-                    "response_mime_type": "application/json"
+                    "temperature": temperature
                 }
             }
 
@@ -200,6 +198,10 @@ class GeminiAPIKeyManager:
                         for part in parts:
                             if "text" in part:
                                 return part["text"]
+
+                elif response.status_code == 400:
+                    logging.error(f"⚠️ HTTP 400 Bad Request Payload Error: {response.text}")
+                    self.switch_to_next_key(reason="HTTP 400 Payload Error")
 
                 elif response.status_code == 429:
                     backoff = min(2 ** (attempts % 4), 8)
@@ -277,7 +279,6 @@ class AlphaDatabase:
             conn.commit()
 
     def purge_expired_data(self, hours=24):
-        """Purge data older than 24 hours to prevent DB bloat."""
         cutoff_str = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -336,7 +337,6 @@ class GeminiAlphaEngine:
                 score = int(item.get("opportunity_score", 70))
                 risk = str(item.get("risk_level", "LOW")).upper()
 
-                # Anti-scam override check
                 if risk == "CRITICAL" or item.get("verdict") == "BLOCKED":
                     logging.warning(f"🛡️ BLOCKED: Project {p_name} flagged with CRITICAL risk. Alert suppressed.")
                     self.db.mark_hash_sent(p_name, unique_hash, score, "CRITICAL")
@@ -364,7 +364,6 @@ class GeminiAlphaEngine:
                 continue
 
     def fetch_fresh_web3_intelligence_12h(self):
-        """Scans Web3 sources and scores events using the 100-point opportunity matrix."""
         system_prompt = (
             "You are an OG Hidden Analyst & Master Crypto Intelligence Operating System. "
             "Search RootData (rootdata.com), CryptoRank (cryptorank.io), Crypto-Fundraising (crypto-fundraising.info), "
@@ -373,7 +372,7 @@ class GeminiAlphaEngine:
             "2. Incentivized Airdrops, Points Programs, Quests, Faucets, Testnets, Node/App Mining, and Whitelists\n"
             "3. Free Welcome Bonuses, Futures Trading Bonuses, Starter Packs, and No-Deposit Promos\n"
             "4. Confirmed TGE Dates, Snapshots, Eligibility Checks, and Claim Portals\n"
-            "5. Fresh Tier-1 VC Funding Rounds (Pre-Seed, Seed, Series A/B, Strategic)\n\n"
+            "5. Fresh Tier-1/Tier-2 VC Funding Rounds (Pre-Seed, Seed, Series A/B, Strategic)\n\n"
             "EVALUATE EACH EVENT USING THE 100-POINT OPPORTUNITY MATRIX:\n"
             "- Fundamentals (0-20)\n"
             "- On-Chain / Smart Money (0-20)\n"
@@ -389,7 +388,7 @@ class GeminiAlphaEngine:
             "- Assign 'risk_level': LOW, MEDIUM, HIGH, or CRITICAL.\n"
             "- Assign 'evidence_tier': Level 0 to Level 6.\n"
             "- Assign 'verdict': ELITE, VERY STRONG, STRONG, WATCH, IGNORE, or BLOCKED.\n"
-            "- OUTPUT ONLY VALID JSON ARRAY CODE BLOCK."
+            "- OUTPUT MUST BE VALID JSON ARRAY CODE BLOCK."
         )
         user_prompt = """
 Scan breaking Web3 developments from the LAST 12 HOURS and return formatted JSON array.
@@ -414,8 +413,7 @@ JSON Output Schema:
     "active_user_benefit": "Exact reward/action (e.g., $50 Free Bonus / Testnet Points / App Mining)",
     "official_direct_link": "Direct participation or claim link",
     "source_link": "Official announcement or RootData URL",
-    "executive_summary": "2-3 precise sentences detailing utility, features, and participation steps.",
-    "key_reasons": ["Reason 1", "Reason 2"]
+    "executive_summary": "2-3 precise sentences detailing utility, features, and participation steps."
   }
 ]
 Return ONLY a valid JSON array or [] if no fresh data found.
@@ -430,7 +428,6 @@ Return ONLY a valid JSON array or [] if no fresh data found.
             return []
 
     def build_beautiful_telegram_post(self, item, source_link, direct_link):
-        """Generates a structured Telegram intelligence report."""
         p_name = escape_html(clean_val(item.get("project_name"), "Web3 Project"))
         e_title = escape_html(clean_val(item.get("event_title"), "Breaking Update"))
         round_type = escape_html(clean_val(item.get("series_round"), "Milestone Phase"))
@@ -453,7 +450,6 @@ Return ONLY a valid JSON array or [] if no fresh data found.
 
         check_text = (e_title + " " + round_type + " " + event_type + " " + user_benefit).lower()
 
-        # Dynamic Category Header Routing
         if any(kw in check_text for kw in ["cex", "dex", "exchange launch", "launchpool", "perpetual"]) or event_type == "EXCHANGE_LAUNCH":
             header = "🏛️ <b>NEW CEX/DEX LAUNCH & EXCHANGE CAMPAIGN</b>"
             is_vc_post = False
@@ -556,7 +552,6 @@ Return ONLY a valid JSON array or [] if no fresh data found.
 
     @staticmethod
     def extract_json(text):
-        """Extract JSON block safely."""
         if not text:
             return "[]"
         text = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
