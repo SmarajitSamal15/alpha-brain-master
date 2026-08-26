@@ -29,11 +29,14 @@ TIME_WINDOW_HOURS = 12
 CACHE_PURGE_HOURS = 24
 MIN_SCORE_THRESHOLD = 65  # Minimum score out of 100 to trigger alert
 
-# Standard Gemini API Models
+# Complete Auto-Switch Model Pipeline (Flash, Pro & Plain Model Candidates)
 MODEL_CANDIDATES = [
-    "gemini-1.5-flash",
+    "gemini-2.5-flash",
     "gemini-2.0-flash",
-    "gemini-1.5-pro"
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+    "gemini-2.0-flash-lite",
+    "gemini-2.0-pro-exp-02-05"
 ]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -133,7 +136,7 @@ def detect_link_label(url):
     return "Verify Official Announcement"
 
 # =================================================================================
-# 🔄 MULTI-KEY FAILOVER GEMINI MANAGER
+# 🔄 MULTI-KEY & MULTI-MODEL AUTO-SWITCH FAILOVER MANAGER
 # =================================================================================
 
 class GeminiAPIKeyManager:
@@ -168,7 +171,7 @@ class GeminiAPIKeyManager:
 
     def call_gemini_with_search(self, system_prompt, user_prompt, temperature=0.1):
         attempts = 0
-        max_attempts = max(len(self.keys) * len(self.models) * 2, 10)
+        max_attempts = max(len(self.keys) * len(self.models) * 2, 12)
 
         while attempts < max_attempts:
             current_key = self.get_current_key()
@@ -177,7 +180,7 @@ class GeminiAPIKeyManager:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent?key={current_key}"
             headers = {"Content-Type": "application/json"}
             
-            # Removed conflicting response_mime_type when googleSearch tool is enabled
+            # Payload optimized to avoid 400 Bad Request when search tool is active
             payload = {
                 "contents": [{"parts": [{"text": user_prompt}]}],
                 "systemInstruction": {"parts": [{"text": system_prompt}]},
@@ -199,9 +202,12 @@ class GeminiAPIKeyManager:
                             if "text" in part:
                                 return part["text"]
 
+                elif response.status_code == 404:
+                    self.switch_to_next_model(reason=f"HTTP 404 Model {current_model} Not Found")
+
                 elif response.status_code == 400:
-                    logging.error(f"⚠️ HTTP 400 Bad Request Payload Error: {response.text}")
-                    self.switch_to_next_key(reason="HTTP 400 Payload Error")
+                    logging.error(f"⚠️ HTTP 400 Bad Request Payload Error on {current_model}: {response.text}")
+                    self.switch_to_next_model(reason=f"HTTP 400 Payload Error on {current_model}")
 
                 elif response.status_code == 429:
                     backoff = min(2 ** (attempts % 4), 8)
@@ -213,9 +219,6 @@ class GeminiAPIKeyManager:
 
                 elif response.status_code in [401, 403]:
                     self.switch_to_next_key(reason=f"HTTP Status {response.status_code} Auth/Quota Error")
-
-                elif response.status_code == 404:
-                    self.switch_to_next_model(reason="HTTP 404 Model Not Found")
 
                 else:
                     backoff = min(2 ** (attempts % 3), 6)
