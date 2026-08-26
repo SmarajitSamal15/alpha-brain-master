@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from datetime import datetime, timedelta, timezone
 
 # =================================================================================
-# ⚙️ SECURE ENVIRONMENT & MASTER CONFIGURATION
+# ⚙️ SECURE ENVIRONMENT & MASTER SYSTEM CONFIGURATION
 # =================================================================================
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -27,9 +27,9 @@ GEMINI_API_KEYS = [k.strip() for k in GEMINI_KEYS_RAW.split(",") if k.strip()]
 DB_FILE = "alpha_brain_master.db"
 TIME_WINDOW_HOURS = 12
 CACHE_PURGE_HOURS = 24
-MIN_SCORE_THRESHOLD = 65  # Minimum score out of 100 to trigger alert
+MIN_SCORE_THRESHOLD = 65  # Minimum score out of 100 required to trigger alert
 
-# Complete Auto-Switch Model Pipeline (Flash, Pro & Plain Model Candidates)
+# Complete 6-Model Auto-Switch Pipeline (1st Script Machinery)
 MODEL_CANDIDATES = [
     "gemini-2.5-flash",
     "gemini-2.0-flash",
@@ -84,13 +84,17 @@ def clean_investor_list(investor_str):
     return ", ".join(deduped) if deduped else "Undisclosed"
 
 def escape_html(text):
-    """Safely escape HTML entities for Telegram HTML parse mode to prevent 400 Bad Request crashes."""
+    """Safely escape HTML entities for Telegram HTML parse mode."""
     if not text:
         return "Undisclosed"
     return html.escape(str(text))
 
 def generate_smart_event_hash(project_name, event_title, event_type):
-    """Smart Event-Specific Hash."""
+    """
+    Smart Event-Specific Hash:
+    - Blocks exact duplicate posts for the SAME event.
+    - ALLOWS different news updates for the SAME project.
+    """
     norm_pname = normalize_text(project_name)
     combined_text = f" {event_title} {event_type} ".upper()
 
@@ -179,15 +183,11 @@ class GeminiAPIKeyManager:
 
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{current_model}:generateContent?key={current_key}"
             headers = {"Content-Type": "application/json"}
-            
-            # Payload optimized to avoid 400 Bad Request when search tool is active
             payload = {
                 "contents": [{"parts": [{"text": user_prompt}]}],
                 "systemInstruction": {"parts": [{"text": system_prompt}]},
                 "tools": [{"googleSearch": {}}],
-                "generationConfig": {
-                    "temperature": temperature
-                }
+                "generationConfig": {"temperature": temperature}
             }
 
             try:
@@ -206,7 +206,7 @@ class GeminiAPIKeyManager:
                     self.switch_to_next_model(reason=f"HTTP 404 Model {current_model} Not Found")
 
                 elif response.status_code == 400:
-                    logging.error(f"⚠️ HTTP 400 Bad Request Payload Error on {current_model}: {response.text}")
+                    logging.error(f"⚠️ HTTP 400 Payload Error on {current_model}: {response.text}")
                     self.switch_to_next_model(reason=f"HTTP 400 Payload Error on {current_model}")
 
                 elif response.status_code == 429:
@@ -238,7 +238,7 @@ class GeminiAPIKeyManager:
         raise Exception("❌ Exhausted all Gemini API keys and model fallbacks.")
 
 # =================================================================================
-# 💾 DATABASE ENGINE (EVENT-SPECIFIC DUPLICATE STOP + AUTO 24H PURGE)
+# 💾 DATABASE ENGINE (5-COLUMN SCHEMA + EVENT DUPLICATE STOP + AUTO 24H PURGE)
 # =================================================================================
 
 class AlphaDatabase:
@@ -304,7 +304,7 @@ class GeminiAlphaEngine:
         logging.info("⚡ Purging database history older than 24 hours...")
         self.db.purge_expired_data(hours=CACHE_PURGE_HOURS)
 
-        logging.info("⚡ Executing Full 100-Point Crypto Intelligence Scan...")
+        logging.info("⚡ Executing Full 100-Point Web3 Alpha, CEX/DEX, Bonus & VC Intelligence Scan...")
         raw_items = self.fetch_fresh_web3_intelligence_12h()
 
         if not raw_items:
@@ -339,14 +339,17 @@ class GeminiAlphaEngine:
 
                 score = int(item.get("opportunity_score", 70))
                 risk = str(item.get("risk_level", "LOW")).upper()
+                verdict = str(item.get("verdict", "STRONG")).upper()
 
-                if risk == "CRITICAL" or item.get("verdict") == "BLOCKED":
-                    logging.warning(f"🛡️ BLOCKED: Project {p_name} flagged with CRITICAL risk. Alert suppressed.")
+                # Block Critical Risk or Explicitly Blocked Projects
+                if risk == "CRITICAL" or verdict == "BLOCKED":
+                    logging.warning(f"🛡️ BLOCKED: Project {p_name} flagged with CRITICAL risk or BLOCKED verdict. Alert suppressed.")
                     self.db.mark_hash_sent(p_name, unique_hash, score, "CRITICAL")
                     continue
 
+                # Filter out low quality / low scoring events below 65 Threshold
                 if score < MIN_SCORE_THRESHOLD:
-                    logging.info(f"📉 Filtered: {p_name} score ({score}/100) below threshold ({MIN_SCORE_THRESHOLD}).")
+                    logging.info(f"📉 Filtered: {p_name} score ({score}/100) below threshold ({MIN_SCORE_THRESHOLD}). Alert suppressed.")
                     continue
 
                 source_link = clean_val(item.get("source_link"), "https://rootdata.com")
@@ -367,15 +370,16 @@ class GeminiAlphaEngine:
                 continue
 
     def fetch_fresh_web3_intelligence_12h(self):
+        """Scans Web3 sources with Full 100-Point Matrix + Expanded Scope + Strict Filters"""
         system_prompt = (
-            "You are an OG Hidden Analyst & Master Crypto Intelligence Operating System. "
+            "You are an OG Hidden Analyst & Master Web3 Alpha, Exchange & Free Incentive Operating System. "
             "Search RootData (rootdata.com), CryptoRank (cryptorank.io), Crypto-Fundraising (crypto-fundraising.info), "
-            "Web3 RSS feeds, Mirror, Telegram Announcements, and X/Twitter STRICTLY for live announcements from the LAST 12 HOURS:\n"
-            "1. CEX/DEX Launches, Early Access, Launchpools, Launchpads, and Liquidity Mining\n"
-            "2. Incentivized Airdrops, Points Programs, Quests, Faucets, Testnets, Node/App Mining, and Whitelists\n"
-            "3. Free Welcome Bonuses, Futures Trading Bonuses, Starter Packs, and No-Deposit Promos\n"
-            "4. Confirmed TGE Dates, Snapshots, Eligibility Checks, and Claim Portals\n"
-            "5. Fresh Tier-1/Tier-2 VC Funding Rounds (Pre-Seed, Seed, Series A/B, Strategic)\n\n"
+            "Web3 RSS feeds, Mirror, Telegram Announcements, and X/Twitter STRICTLY for breaking announcements from the LAST 12 HOURS:\n"
+            "1. BRAND NEW & ORIGINATING Centralized Exchange (CEX) and Decentralized Exchange (DEX - Spot, Perpetual, Orderbook, AMM, Hybrid) Platform Launches/Debuts, Brand New Exchange Protocol Names, Early Access/Beta Portals, Exchange Token Airdrops, Launchpools, Launchpads, and Initial Liquidity Mining Campaigns\n"
+            "2. Live/Incentivized Airdrops, Points Programs, Quests, Faucets, Testnets, Free Token Mining, Node Mining, Tap-to-Earn, Whitelists, and Early Access Portals\n"
+            "3. Free Welcome Bonuses, Exchange Futures Bonuses, Free Starter Packs, Sign-up Rewards, Web3 Casino/iGaming No-Deposit Promos, Mystery Boxes, Deposit/No-Deposit Bonus Vouchers, and Official Giveaways\n"
+            "4. Confirmed TGE Dates, Initial Token Launch Debuts, Snapshot Announcements, Eligibility Verification, and Token Claim Portals\n"
+            "5. Fresh Tier-1/Tier-2 VC Funding Rounds (Pre-Seed, Seed, Series A/B/C/D, Strategic, Private Capital)\n\n"
             "EVALUATE EACH EVENT USING THE 100-POINT OPPORTUNITY MATRIX:\n"
             "- Fundamentals (0-20)\n"
             "- On-Chain / Smart Money (0-20)\n"
@@ -385,13 +389,16 @@ class GeminiAlphaEngine:
             "- Market Structure (0-10)\n"
             "- Narrative Alignment (0-5)\n"
             "- Security & Risk (0-5)\n\n"
-            "MANDATES:\n"
-            "- ALWAYS state active user benefit in 'active_user_benefit'.\n"
-            "- Classify 'event_type' into ONE of: ['EXCHANGE_LAUNCH', 'BONUS_GIVEAWAY', 'MINING_QUEST', 'VC_FUNDING', 'AIRDROP_TESTNET', 'TGE_SNAPSHOT'].\n"
+            "CRITICAL STRICT MANDATES & EXCLUSIONS:\n"
+            "- ALWAYS specify the EXACT actionable reward/benefit for public users in 'active_user_benefit' (e.g., $50 Free Futures Bonus / Early Beta Access / Free Daily Mining App / $10 Welcome Voucher / Testnet Points / Free Starter Pack).\n"
+            "- IGNORE routine secondary exchange listings for tokens that are already circulating in the market.\n"
+            "- IGNORE general market price updates, protocol hacks/exploits, governance votes, and macro economy news.\n"
+            "- Ensure ALL JSON fields are written in grammatically flawless, highly professional English.\n"
+            "- Classify 'event_type' strictly into ONE of: ['EXCHANGE_LAUNCH', 'BONUS_GIVEAWAY', 'MINING_QUEST', 'VC_FUNDING', 'AIRDROP_TESTNET', 'TGE_SNAPSHOT'].\n"
             "- Assign 'risk_level': LOW, MEDIUM, HIGH, or CRITICAL.\n"
             "- Assign 'evidence_tier': Level 0 to Level 6.\n"
             "- Assign 'verdict': ELITE, VERY STRONG, STRONG, WATCH, IGNORE, or BLOCKED.\n"
-            "- OUTPUT MUST BE VALID JSON ARRAY CODE BLOCK."
+            "- OUTPUT MUST BE VALID JSON ARRAY CODE BLOCK OR []."
         )
         user_prompt = """
 Scan breaking Web3 developments from the LAST 12 HOURS and return formatted JSON array.
@@ -399,27 +406,27 @@ Scan breaking Web3 developments from the LAST 12 HOURS and return formatted JSON
 JSON Output Schema:
 [
   {
-    "project_name": "Official Project Name",
-    "event_title": "Descriptive Event Title in Flawless English",
+    "project_name": "Official Project Name (or Brand New CEX/DEX Protocol Name)",
+    "event_title": "Descriptive Event Title in Flawless English (e.g., Brand New Perpetuals DEX Live & $100K Airdrop / $100 Free Futures Bonus / $15M Series A Raised / Free App Mining Live)",
     "event_type": "EXCHANGE_LAUNCH | BONUS_GIVEAWAY | MINING_QUEST | VC_FUNDING | AIRDROP_TESTNET | TGE_SNAPSHOT",
     "opportunity_score": 85,
     "confidence_score": 90,
     "evidence_tier": "Level 5",
     "risk_level": "LOW",
     "verdict": "ELITE",
-    "series_round": "Pre-Seed / Seed / Series A / Testnet / Bonus / Undisclosed",
+    "series_round": "Pre-Seed / Seed / Series A / Series B / Strategic / TGE / Testnet / Bonus / Mining / Exchange Launch / Undisclosed",
     "fresh_funding": "$XX M or Undisclosed",
     "total_funding": "$XX M or Undisclosed",
     "valuation": "$XX M or Undisclosed",
-    "fresh_investors": "Comma separated fresh round investors or Undisclosed",
-    "total_investors": "Comma separated historical backers or Undisclosed",
-    "active_user_benefit": "Exact reward/action (e.g., $50 Free Bonus / Testnet Points / App Mining)",
-    "official_direct_link": "Direct participation or claim link",
-    "source_link": "Official announcement or RootData URL",
-    "executive_summary": "2-3 precise sentences detailing utility, features, and participation steps."
+    "fresh_investors": "Comma separated fresh round lead/co-investors or Undisclosed",
+    "total_investors": "Comma separated all historical backers or Undisclosed",
+    "active_user_benefit": "Specify EXACT reward/action (e.g., Free $20 Futures Trading Bonus / Early Access Registration / Free Daily Token Mining / $100 Starter Pack Voucher / Complete Testnet) or 'None'",
+    "official_direct_link": "Direct participation, registration, or claim link",
+    "source_link": "Direct official announcement URL, X post, or RootData page",
+    "executive_summary": "2-3 precise sentences written in grammatically flawless English detailing utility, platform features, and participation steps."
   }
 ]
-Return ONLY a valid JSON array or [] if no fresh data found.
+Return ONLY a valid JSON array block or [] if no fresh data found.
 """
         try:
             res = self.key_manager.call_gemini_with_search(system_prompt, user_prompt)
@@ -427,10 +434,11 @@ Return ONLY a valid JSON array or [] if no fresh data found.
             data = json.loads(json_str)
             return data if isinstance(data, list) else []
         except Exception as e:
-            logging.error(f"Error in Intelligence Scan: {str(e)}")
+            logging.error(f"Error in Multi-Source Intelligence Scan: {str(e)}")
             return []
 
     def build_beautiful_telegram_post(self, item, source_link, direct_link):
+        """Generates OG Intelligence Post with Dynamic Category Headers and Double-Quoted HTML Anchors"""
         p_name = escape_html(clean_val(item.get("project_name"), "Web3 Project"))
         e_title = escape_html(clean_val(item.get("event_title"), "Breaking Update"))
         round_type = escape_html(clean_val(item.get("series_round"), "Milestone Phase"))
@@ -453,19 +461,20 @@ Return ONLY a valid JSON array or [] if no fresh data found.
 
         check_text = (e_title + " " + round_type + " " + event_type + " " + user_benefit).lower()
 
-        if any(kw in check_text for kw in ["cex", "dex", "exchange launch", "launchpool", "perpetual"]) or event_type == "EXCHANGE_LAUNCH":
+        # Dynamic Category Header Routing
+        if any(kw in check_text for kw in ["cex", "dex", "exchange launch", "launchpool", "trading competition", "liquidity mining", "perpetual", "spot dex"]) or event_type == "EXCHANGE_LAUNCH":
             header = "🏛️ <b>NEW CEX/DEX LAUNCH & EXCHANGE CAMPAIGN</b>"
             is_vc_post = False
-        elif any(kw in check_text for kw in ["bonus", "futures", "giveaway", "voucher", "no-deposit"]) or event_type == "BONUS_GIVEAWAY":
+        elif any(kw in check_text for kw in ["bonus", "futures", "giveaway", "starter pack", "welcome", "voucher", "mystery box", "sign-up", "casino", "reward", "no-deposit"]) or event_type == "BONUS_GIVEAWAY":
             header = "🎁 <b>EXCLUSIVE FREE BONUS & REWARD ALERT</b>"
             is_vc_post = False
-        elif any(kw in check_text for kw in ["mining", "node", "tap-to-earn", "faucet", "quest"]) or event_type == "MINING_QUEST":
+        elif any(kw in check_text for kw in ["mining", "node", "tap-to-earn", "faucet", "quest", "whitelist"]) or event_type == "MINING_QUEST":
             header = "⛏️ <b>FREE MINING & ACTIONABLE AIRDROP ALERT</b>"
             is_vc_post = False
-        elif any(kw in check_text for kw in ["tge", "snapshot", "token launch"]) or event_type == "TGE_SNAPSHOT":
+        elif any(kw in check_text for kw in ["tge", "snapshot", "token launch", "launchpad"]) or event_type == "TGE_SNAPSHOT":
             header = "🔥 <b>BREAKING TGE & SNAPSHOT ALERT</b>"
             is_vc_post = False
-        elif any(kw in check_text for kw in ["seed", "series", "raised", "funding", "vc"]) or event_type == "VC_FUNDING":
+        elif any(kw in check_text for kw in ["seed", "series", "raised", "funding", "valuation", "vc"]) or event_type == "VC_FUNDING":
             header = "💎 <b>NEW VC FUNDING & INSTITUTIONAL ALERT</b>"
             is_vc_post = True
         else:
@@ -498,9 +507,10 @@ Return ONLY a valid JSON array or [] if no fresh data found.
         safe_source_link = html.escape(source_link, quote=True)
         safe_direct_link = html.escape(direct_link, quote=True)
 
-        link_block = f"🔗 <b>Source Announcement:</b>\n<a href='{safe_source_link}'><b>{source_label}</b></a>"
+        # Double-quoted href HTML anchor tags to completely prevent Telegram 400 Bad Request
+        link_block = f'🔗 <b>Source Announcement:</b>\n<a href="{safe_source_link}"><b>{source_label}</b></a>'
         if direct_link != source_link and is_valid_http_url(direct_link):
-            link_block += f"\n\n🪂 <b>Official Direct Claim Link:</b>\n<a href='{safe_direct_link}'><b>Click Here to Claim / Join Portal</b></a>"
+            link_block += f'\n\n🪂 <b>Official Direct Claim Link:</b>\n<a href="{safe_direct_link}"><b>Click Here to Claim / Join Portal</b></a>'
 
         post_content = (
             f"{header}\n"
@@ -570,7 +580,7 @@ Return ONLY a valid JSON array or [] if no fresh data found.
 
 def main():
     logging.info("=========================================================")
-    logging.info("🚀 STARTING MASTER ULTIMATE CRYPTO INTELLIGENCE BOT 🚀")
+    logging.info("🚀 STARTING SUPER POWERFUL CRYPTO INTELLIGENCE BOT 🚀")
     logging.info("=========================================================")
 
     key_manager = GeminiAPIKeyManager(GEMINI_API_KEYS, MODEL_CANDIDATES)
@@ -579,7 +589,7 @@ def main():
 
     engine.execute_master_pipeline()
 
-    logging.info("✅ Master pipeline execution completed cleanly.")
+    logging.info("✅ Super powerful master execution completed cleanly.")
 
 if __name__ == "__main__":
     main()
