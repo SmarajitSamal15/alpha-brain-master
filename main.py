@@ -29,7 +29,7 @@ TIME_WINDOW_HOURS = 12
 CACHE_PURGE_HOURS = 24
 MIN_SCORE_THRESHOLD = 65  # Minimum score out of 100 required to trigger alert
 
-# Complete 6-Model Auto-Switch Pipeline (1st Script Machinery)
+# Complete 6-Model Auto-Switch Failover Pipeline
 MODEL_CANDIDATES = [
     "gemini-2.5-flash",
     "gemini-2.0-flash",
@@ -238,7 +238,7 @@ class GeminiAPIKeyManager:
         raise Exception("❌ Exhausted all Gemini API keys and model fallbacks.")
 
 # =================================================================================
-# 💾 DATABASE ENGINE (5-COLUMN SCHEMA + EVENT DUPLICATE STOP + AUTO 24H PURGE)
+# 💾 DATABASE ENGINE (AUTO MIGRATION + 5-COLUMN SCHEMA + AUTO 24H PURGE)
 # =================================================================================
 
 class AlphaDatabase:
@@ -262,6 +262,16 @@ class AlphaDatabase:
                     sent_at TEXT
                 )
             """)
+            
+            # Auto Migration: Check and add missing columns automatically
+            cursor.execute("PRAGMA table_info(sent_history)")
+            existing_columns = [column[1] for column in cursor.fetchall()]
+            
+            if "opportunity_score" not in existing_columns:
+                cursor.execute("ALTER TABLE sent_history ADD COLUMN opportunity_score INTEGER DEFAULT 0")
+            if "risk_level" not in existing_columns:
+                cursor.execute("ALTER TABLE sent_history ADD COLUMN risk_level TEXT DEFAULT 'LOW'")
+
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sent_hash ON sent_history(unique_hash)")
             conn.commit()
 
@@ -342,8 +352,8 @@ class GeminiAlphaEngine:
                 verdict = str(item.get("verdict", "STRONG")).upper()
 
                 # Block Critical Risk or Explicitly Blocked Projects
-                if risk == "CRITICAL" or verdict == "BLOCKED":
-                    logging.warning(f"🛡️ BLOCKED: Project {p_name} flagged with CRITICAL risk or BLOCKED verdict. Alert suppressed.")
+                if risk == "CRITICAL" or verdict in ["BLOCKED", "IGNORE"]:
+                    logging.warning(f"🛡️ BLOCKED: Project {p_name} flagged with CRITICAL risk or BLOCKED/IGNORE verdict.")
                     self.db.mark_hash_sent(p_name, unique_hash, score, "CRITICAL")
                     continue
 
@@ -351,6 +361,40 @@ class GeminiAlphaEngine:
                 if score < MIN_SCORE_THRESHOLD:
                     logging.info(f"📉 Filtered: {p_name} score ({score}/100) below threshold ({MIN_SCORE_THRESHOLD}). Alert suppressed.")
                     continue
+
+                # =================================================================
+                # 🛑 HARD PYTHON FILTERS AGAINST NOISE & FAKE INCENTIVES
+                # =================================================================
+                benefit_str = str(item.get("active_user_benefit", "")).lower()
+                title_str = e_title.lower()
+                summary_str = str(item.get("executive_summary", "")).lower()
+
+                # 1. Filter out Paid Traps (e.g. Must buy $100 NFT to get $50 bonus)
+                if any(kw in benefit_str or kw in summary_str for kw in ["mint for $", "buy for $", "pay $", "cost $100"]):
+                    logging.info(f"🛡️ PYTHON HARD FILTER: Suppressed paid marketing trap for {p_name}.")
+                    self.db.mark_hash_sent(p_name, unique_hash, score, "PAID_TRAP")
+                    continue
+
+                # 2. Filter out Social/Product Features without Airdrop (e.g. X/Twitter charts)
+                if norm_pname in ["X", "TWITTER"] or "cashtag" in title_str or "chart" in title_str:
+                    if not any(kw in benefit_str for kw in ["airdrop", "free token", "claim", "reward", "testnet"]):
+                        logging.info(f"🛡️ PYTHON HARD FILTER: Suppressed general social feature news for {p_name}.")
+                        self.db.mark_hash_sent(p_name, unique_hash, score, "SOCIAL_NEWS")
+                        continue
+
+                # 3. Filter out Dust Giveaways (< $1,000 USD Total Prize Pool)
+                if any(kw in title_str or kw in benefit_str for kw in ["$300", "$100", "$200", "$500", "$50"]):
+                    if "prize pool" in benefit_str or "giveaway" in title_str or "mexc" in title_str:
+                        logging.info(f"🛡️ PYTHON HARD FILTER: Suppressed low-value dust giveaway for {p_name}.")
+                        self.db.mark_hash_sent(p_name, unique_hash, score, "DUST_GIVEAWAY")
+                        continue
+
+                # 4. Filter out items with no active user benefit for non-VC posts
+                if event_type != "VC_FUNDING" and benefit_str in ["none", "undisclosed", "n/a", "null", ""]:
+                    logging.info(f"🛡️ PYTHON HARD FILTER: Suppressed non-actionable post for {p_name}.")
+                    self.db.mark_hash_sent(p_name, unique_hash, score, "NO_BENEFIT")
+                    continue
+                # =================================================================
 
                 source_link = clean_val(item.get("source_link"), "https://rootdata.com")
                 direct_link = clean_val(item.get("official_direct_link"), source_link)
@@ -370,14 +414,14 @@ class GeminiAlphaEngine:
                 continue
 
     def fetch_fresh_web3_intelligence_12h(self):
-        """Scans Web3 sources with Full 100-Point Matrix + Expanded Scope + Strict Filters"""
+        """Scans Web3 sources with Full 100-Point Matrix + Strict Anti-Spam Rules"""
         system_prompt = (
             "You are an OG Hidden Analyst & Master Web3 Alpha, Exchange & Free Incentive Operating System. "
             "Search RootData (rootdata.com), CryptoRank (cryptorank.io), Crypto-Fundraising (crypto-fundraising.info), "
             "Web3 RSS feeds, Mirror, Telegram Announcements, and X/Twitter STRICTLY for breaking announcements from the LAST 12 HOURS:\n"
             "1. BRAND NEW & ORIGINATING Centralized Exchange (CEX) and Decentralized Exchange (DEX - Spot, Perpetual, Orderbook, AMM, Hybrid) Platform Launches/Debuts, Brand New Exchange Protocol Names, Early Access/Beta Portals, Exchange Token Airdrops, Launchpools, Launchpads, and Initial Liquidity Mining Campaigns\n"
             "2. Live/Incentivized Airdrops, Points Programs, Quests, Faucets, Testnets, Free Token Mining, Node Mining, Tap-to-Earn, Whitelists, and Early Access Portals\n"
-            "3. Free Welcome Bonuses, Exchange Futures Bonuses, Free Starter Packs, Sign-up Rewards, Web3 Casino/iGaming No-Deposit Promos, Mystery Boxes, Deposit/No-Deposit Bonus Vouchers, and Official Giveaways\n"
+            "3. Free Welcome Bonuses, Exchange Futures Bonuses, Free Starter Packs, Sign-up Rewards, Web3 Casino/iGaming No-Deposit Promos, Mystery Boxes, Deposit/No-Deposit Bonus Vouchers, and Official Giveaways (Minimum $1,000 USD Total Prize Pool)\n"
             "4. Confirmed TGE Dates, Initial Token Launch Debuts, Snapshot Announcements, Eligibility Verification, and Token Claim Portals\n"
             "5. Fresh Tier-1/Tier-2 VC Funding Rounds (Pre-Seed, Seed, Series A/B/C/D, Strategic, Private Capital)\n\n"
             "EVALUATE EACH EVENT USING THE 100-POINT OPPORTUNITY MATRIX:\n"
@@ -389,14 +433,17 @@ class GeminiAlphaEngine:
             "- Market Structure (0-10)\n"
             "- Narrative Alignment (0-5)\n"
             "- Security & Risk (0-5)\n\n"
-            "CRITICAL STRICT MANDATES & EXCLUSIONS:\n"
-            "- ALWAYS specify the EXACT actionable reward/benefit for public users in 'active_user_benefit' (e.g., $50 Free Futures Bonus / Early Beta Access / Free Daily Mining App / $10 Welcome Voucher / Testnet Points / Free Starter Pack).\n"
-            "- IGNORE routine secondary exchange listings for tokens that are already circulating in the market.\n"
+            "STRICT EXCLUSIONS & MANDATES:\n"
+            "- DO NOT output items that offer NO direct benefit to public users unless it is a significant VC Funding round.\n"
+            "- REJECT paid marketing traps where users must buy/mint paid items to get a smaller bonus (e.g., pay $100 for $50 bonus).\n"
+            "- REJECT minor social media giveaways with total prize pools under $1,000 USD (e.g. $300 Twitter draws).\n"
+            "- REJECT general social network feature updates or trading chart additions unless there is a dedicated token airdrop.\n"
+            "- IGNORE routine secondary exchange listings for tokens already circulating in the market.\n"
             "- IGNORE general market price updates, protocol hacks/exploits, governance votes, and macro economy news.\n"
+            "- If an item has low user value or low quality, assign opportunity_score below 65 and verdict as 'IGNORE' or 'BLOCKED'.\n"
             "- Ensure ALL JSON fields are written in grammatically flawless, highly professional English.\n"
             "- Classify 'event_type' strictly into ONE of: ['EXCHANGE_LAUNCH', 'BONUS_GIVEAWAY', 'MINING_QUEST', 'VC_FUNDING', 'AIRDROP_TESTNET', 'TGE_SNAPSHOT'].\n"
             "- Assign 'risk_level': LOW, MEDIUM, HIGH, or CRITICAL.\n"
-            "- Assign 'evidence_tier': Level 0 to Level 6.\n"
             "- Assign 'verdict': ELITE, VERY STRONG, STRONG, WATCH, IGNORE, or BLOCKED.\n"
             "- OUTPUT MUST BE VALID JSON ARRAY CODE BLOCK OR []."
         )
@@ -407,20 +454,20 @@ JSON Output Schema:
 [
   {
     "project_name": "Official Project Name (or Brand New CEX/DEX Protocol Name)",
-    "event_title": "Descriptive Event Title in Flawless English (e.g., Brand New Perpetuals DEX Live & $100K Airdrop / $100 Free Futures Bonus / $15M Series A Raised / Free App Mining Live)",
+    "event_title": "Descriptive Event Title in Flawless English",
     "event_type": "EXCHANGE_LAUNCH | BONUS_GIVEAWAY | MINING_QUEST | VC_FUNDING | AIRDROP_TESTNET | TGE_SNAPSHOT",
     "opportunity_score": 85,
     "confidence_score": 90,
     "evidence_tier": "Level 5",
     "risk_level": "LOW",
-    "verdict": "ELITE",
+    "verdict": "ELITE | VERY STRONG | STRONG | WATCH | IGNORE | BLOCKED",
     "series_round": "Pre-Seed / Seed / Series A / Series B / Strategic / TGE / Testnet / Bonus / Mining / Exchange Launch / Undisclosed",
     "fresh_funding": "$XX M or Undisclosed",
     "total_funding": "$XX M or Undisclosed",
     "valuation": "$XX M or Undisclosed",
     "fresh_investors": "Comma separated fresh round lead/co-investors or Undisclosed",
     "total_investors": "Comma separated all historical backers or Undisclosed",
-    "active_user_benefit": "Specify EXACT reward/action (e.g., Free $20 Futures Trading Bonus / Early Access Registration / Free Daily Token Mining / $100 Starter Pack Voucher / Complete Testnet) or 'None'",
+    "active_user_benefit": "Specify EXACT reward/action (e.g., Free $20 Futures Trading Bonus / Early Access Registration / Free Daily Token Mining / Complete Testnet) or 'None'",
     "official_direct_link": "Direct participation, registration, or claim link",
     "source_link": "Direct official announcement URL, X post, or RootData page",
     "executive_summary": "2-3 precise sentences written in grammatically flawless English detailing utility, platform features, and participation steps."
