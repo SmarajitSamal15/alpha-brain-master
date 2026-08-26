@@ -1,40 +1,55 @@
-name: Autonomous Web3 Alpha Engine
+name: Airdrop Head Dept AI Labs Scan
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # Trigger every 15 minutes
-  workflow_dispatch:        # Manual run button in GitHub Actions UI
+    # ⏱️Runs every 15 minutes automatically (UTC Time)
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # Enables manual run button for testing
 
 jobs:
-  run-alpha-bot:
+  run-alpha-engine:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    
+    # Ensures database writes don't conflict, although 15min window is safe
+    concurrency:
+      group: crypto-intelligence-bot
+      cancel-in-progress: false
 
     steps:
-      - name: Checkout Repository
+      - name: 📥 Checkout repository code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: 📂 Restore SQLite Database Cache
+        id: cache-db-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: alpha_brain_master.db
+          # Restores the latest successful DB, or creates new on key miss
+          key: Linux-alpha-db-v1-${{ github.run_id }}
+          restore-keys: |
+            Linux-alpha-db-v1-
+
+      - name: 🐍 Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: Install Python Dependencies
+      - name: 📦 Install dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install requests
 
-      - name: Run Master Alpha Engine Script
+      - name: 🚀 Run Crypto Intelligence Bot OS
         env:
+          # Securely fetch secrets from GitHub settings
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }} # Format: KEY1,KEY2,KEY3
         run: python main.py
 
-      - name: Auto-Commit Database State
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add alpha_brain_master.db
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update database state & logs [skip ci]" && git push)
+      - name: 💾 Save SQLite Database Cache (On Success)
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: alpha_brain_master.db
+          # Saves with unique run ID key to ensure persistence across runs
+          key: Linux-alpha-db-v1-${{ github.run_id }}
