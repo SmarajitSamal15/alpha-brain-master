@@ -28,14 +28,13 @@ DB_FILE = "alpha_brain_master.db"
 TIME_WINDOW_HOURS = 12
 CACHE_PURGE_HOURS = 24
 
-# Ultimate Multi-Model Auto-Switch Failover Pipeline
+# Production-Verified Gemini Model Failover Pipeline (Primary: 2.5 Flash)
 MODEL_CANDIDATES = [
     "gemini-2.5-flash",
-    "gemini-3.5-flash",
-    "gemini-3.1-pro-preview",
     "gemini-2.5-pro",
+    "gemini-2.0-flash",
     "gemini-1.5-flash",
-    "gemini-2.0-flash"
+    "gemini-1.5-pro"
 ]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -373,23 +372,15 @@ class GeminiAlphaEngine:
             "You are an Ultimate Web3 Alpha, Exchange & Free Incentive Specialist. "
             "Search RootData (rootdata.com), CryptoRank (cryptorank.io), Crypto-Fundraising (crypto-fundraising.info), "
             "Web3 RSS feeds, Mirror, Telegram Announcements, and X/Twitter STRICTLY for breaking announcements from the LAST 12 HOURS:\n"
-            "1. BRAND NEW & ORIGINATING Centralized Exchange (CEX) and Decentralized Exchange (DEX - Spot, Perpetual, Orderbook, AMM, Hybrid) Platform Launches/Debuts, Brand New Exchange Protocol Names, Early Access/Beta Portals, Exchange Token Airdrops, Launchpools, Launchpads, and Initial Liquidity Mining Campaigns\n"
-            "2. Live/Incentivized Airdrops, Points Programs, Quests, Faucets, Testnets, Free Token Mining, Node Mining, Tap-to-Earn, Whitelists, and Early Access Portals\n"
-            "3. Free Welcome Bonuses, Exchange Futures Bonuses, Free Starter Packs, Sign-up Rewards, Web3 Casino/iGaming No-Deposit Promos, Mystery Boxes, Deposit/No-Deposit Bonus Vouchers, and Giveaways\n"
-            "4. Confirmed TGE Dates, Initial Token Launch Debuts, Snapshot Announcements, Eligibility Verification, and Token Claim Portals\n"
+            "1. BRAND NEW Centralized Exchange (CEX) & Decentralized Exchange (DEX) Platforms, Launchpools, Launchpads, Liquidity Mining, and Exchange Token Airdrops\n"
+            "2. Live/Incentivized Airdrops, Points Programs, Quests, Faucets, Testnets, Free Token Mining, Node Mining, Tap-to-Earn, Whitelists, and Early Access\n"
+            "3. Free Welcome Bonuses, Exchange Futures Bonuses, Free Starter Packs, Sign-up Rewards, Web3 Casino/iGaming No-Deposit Promos, Mystery Boxes, and Deposit/No-Deposit Bonuses\n"
+            "4. Confirmed TGE Dates, Initial Token Launch Debuts, Snapshot Announcements, Eligibility Checks, and Claim Portals\n"
             "5. Fresh VC Funding Rounds (Pre-Seed, Seed, Series A/B/C/D, Strategic, Private Capital)\n\n"
-            "EVALUATE EACH EVENT USING THE 100-POINT OPPORTUNITY MATRIX:\n"
-            "- Fundamentals (0-20)\n"
-            "- Smart Money / On-Chain (0-20)\n"
-            "- VC Quality & Funding (0-15)\n"
-            "- Catalyst Potential (0-15)\n"
-            "- Tokenomics & Unlocks (0-10)\n"
-            "- Market Structure (0-10)\n"
-            "- Narrative Alignment (0-5)\n"
-            "- Security & Risk (0-5)\n\n"
-            "MANDATES & GUIDELINES:\n"
-            "- Include ANY genuine opportunity, bonus, testnet, airdrop, mining app, or funding round.\n"
-            "- Ensure ALL JSON fields are written in grammatically flawless, highly professional English.\n"
+            "STRICT QUALITY & NOISE FILTERING RULES:\n"
+            "- INCLUDE 100% of high-value opportunities that offer genuine user benefits, active rewards, free crypto, node/token mining, or confirmed Tier-1 VC funding.\n"
+            "- STRICTLY BLOCK all speculative rumors, low-quality meme coins without utility, spam/phishing links, fake giveaways, and unverified news updates.\n"
+            "- Ensure ALL text fields in JSON are written in grammatically flawless, concise, highly professional English.\n"
             "- Classify 'event_type' strictly into ONE of: ['EXCHANGE_LAUNCH', 'BONUS_GIVEAWAY', 'MINING_QUEST', 'VC_FUNDING', 'AIRDROP_TESTNET', 'TGE_SNAPSHOT'].\n"
             "- Assign 'risk_level': LOW, MEDIUM, HIGH, or CRITICAL.\n"
             "- Assign 'verdict': ELITE, VERY STRONG, STRONG, WATCH, or NOTICE.\n"
