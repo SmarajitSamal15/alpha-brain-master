@@ -2,19 +2,20 @@ name: 🚀 Web3 Alpha Engine 24/7 Auto-Runner
 
 on:
   schedule:
-    # Runs automatically every 15 minutes
     - cron: '*/15 * * * *'
-  workflow_dispatch: # Allows manual run button in GitHub Actions tab
+  workflow_dispatch:
 
 jobs:
   execute-alpha-bot:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Needed to push updated SQLite DB back to repo
+      contents: write
 
     steps:
       - name: 📥 Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 🐍 Set up Python 3.10
         uses: actions/setup-python@v5
@@ -39,4 +40,8 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add alpha_brain_master.db
-          git diff --quiet && git diff --staged --quiet || (git commit -m "chore: auto-update history db [skip ci]" && git push)
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: auto-update history db [skip ci]"
+            git pull --rebase origin main
+            git push
+          fi
