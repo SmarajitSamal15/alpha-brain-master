@@ -25,9 +25,8 @@ GEMINI_KEYS_RAW = os.getenv(
 GEMINI_API_KEYS = [k.strip() for k in GEMINI_KEYS_RAW.split(",") if k.strip()]
 
 DB_FILE = "alpha_brain_master.db"
-TIME_WINDOW_HOURS = 12
 CACHE_PURGE_HOURS = 24
-MIN_OPPORTUNITY_SCORE = 65  # Strict threshold: Filter out anything below 65
+MIN_OPPORTUNITY_SCORE = 65  # Filter out low quality below 65 score
 
 # Production-Verified Gemini Model Failover Pipeline
 MODEL_CANDIDATES = [
@@ -253,7 +252,7 @@ class GeminiAPIKeyManager:
         raise Exception("❌ Exhausted all Gemini API keys and model fallbacks.")
 
 # =================================================================================
-# 💾 DATABASE ENGINE (AUTO MIGRATION + FULL SCHEMA + 24H AUTO PURGE)
+# 💾 DATABASE ENGINE (AUTO PURGE OLD DATA & DUPLICATE SHIELD)
 # =================================================================================
 
 class AlphaDatabase:
@@ -306,6 +305,7 @@ class AlphaDatabase:
             conn.commit()
 
     def purge_expired_data(self, hours=24):
+        """Purges older history to prevent database bloat and maintain fresh state."""
         cutoff_str = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -313,7 +313,7 @@ class AlphaDatabase:
             deleted = cursor.rowcount
             conn.commit()
             if deleted > 0:
-                logging.info(f"🧹 Successfully purged {deleted} record(s) older than {hours} hours from Database.")
+                logging.info(f"🧹 Successfully purged {deleted} old record(s) older than {hours} hours from Database.")
 
 # =================================================================================
 # 🧠 MASTER UNRESTRICTED ALL-IN-ONE CRYPTO INTELLIGENCE ENGINE
@@ -393,34 +393,31 @@ class GeminiAlphaEngine:
         logging.info(f"✅ Scanning complete. Total posts dispatched: {posted_count}")
 
     def fetch_fresh_web3_intelligence_12h(self):
-        """Scans complete Web3 universe (RSS feeds, Twitter, RootData, CryptoRank, Mirror, Exchanges, etc.) via Google Search Grounding"""
+        """Scans complete Web3 universe strictly within 12 hours from dynamic current UTC time."""
+        now_utc = datetime.now(timezone.utc)
+        current_time_str = now_utc.strftime("%Y-%m-%d %H:%M:%S UTC")
+        cutoff_time_str = (now_utc - timedelta(hours=12)).strftime("%Y-%m-%d %H:%M:%S UTC")
+
         system_prompt = (
+            f"CURRENT EXACT TIME: {current_time_str}\n"
+            f"STRICT TIME CUTOFF: {cutoff_time_str} (Last 12 Hours Only)\n\n"
             "You are an Unrestricted Universal Web3 Intelligence Radar and Alpha Discovery Engine. "
-            "Use Google Search to scan the complete global internet, including major Web3 RSS feeds "
-            "(AirdropAlert, Airdrops.io, MEXC Blog, CoinTelegraph, Decrypt, Blockworks, The Block, BlockBeats, PANews, ChainCatcher, Foresight News, Odaily), "
-            "analytics platforms (RootData, CryptoRank, Crypto-Fundraising, DefiLlama), official blogs (Mirror.xyz, Medium, Paragraph.xyz), "
-            "exchange announcements (Binance, Bybit, OKX, MEXC, Gate.io, Bitget), official X/Twitter posts, and Telegram channels strictly for BREAKING announcements from the LAST 12 HOURS.\n\n"
-            "COVER ALL CATEGORIES WITHOUT EXCLUSION:\n"
-            "1. AIRDROPS & TESTNETS: Live/Incentivized Airdrops, Points Programs, Quests, Faucets, Testnets, Mainnet Snapshots, Claim Portals, Eligibility Checks, Free Token Mining, Tap-to-Earn, Whitelists, Node Mining.\n"
-            "2. VC FUNDING & INVESTMENTS: Pre-Seed, Seed, Series A/B/C/D, Strategic Rounds, Grants, Tier-1 VC Deals (a16z, Paradigm, Polychain, Dragonfly, Pantera, Jump, Variant, Spartan, DeFiance, Binance Labs, OKX Ventures, etc.).\n"
-            "3. TGE & LISTINGS: Confirmed TGE Dates, Initial Token Launch Debuts, Exchange Launchpads (Binance Launchpool/Launchpad, Bybit, OKX Jumpstart, MEXC Kickstarter, Gate.io Startup).\n"
-            "4. CEX / DEX PLATFORMS: Brand New Exchange Platforms, Perpetuals, DEX Launches, Liquidity Mining, Trading Competitions.\n"
-            "5. FREE BONUSES & REWARDS: Free Futures Trading Bonuses, Welcome Packs, Sign-up Rewards, Mystery Boxes, Deposit/No-Deposit Promos.\n\n"
-            "STRICT QUALITY & FILTERING LAWS:\n"
-            "- Assign an 'opportunity_score' from 0 to 100 based on value, legitimacy, and tier.\n"
-            "- Strictly exclude scam links, obvious phishing, fake giveaways, and unverified rumor mills.\n"
-            "- Strictly write ALL fields in grammatically flawless, highly professional, concise English.\n"
-            "- Classify 'event_type' strictly into ONE of: ['EXCHANGE_LAUNCH', 'BONUS_GIVEAWAY', 'MINING_QUEST', 'VC_FUNDING', 'AIRDROP_TESTNET', 'TGE_SNAPSHOT'].\n"
-            "- Assign 'risk_level': LOW, MEDIUM, HIGH, or CRITICAL.\n"
+            "Use Google Search to scan global internet sources (RSS feeds, RootData, CryptoRank, Twitter, Mirror, CEX announcements) "
+            "for breaking announcements published STRICTLY between the STRICT TIME CUTOFF and CURRENT EXACT TIME.\n\n"
+            "STRICT RULES:\n"
+            f"- Discard and IGNORE any news or article published BEFORE {cutoff_time_str}.\n"
+            "- Only return news verified to have occurred within the last 12 hours.\n"
+            "- Assign 'opportunity_score' (0-100). Ignore rumors, scams, or low quality spam.\n"
             "- OUTPUT MUST BE A VALID JSON ARRAY OR []."
         )
         
-        user_prompt = """
-Scan breaking Web3 developments from the LAST 12 HOURS across all global sources and return a JSON array.
+        user_prompt = f"""
+Current UTC Time: {current_time_str}
+Filter Constraint: Scan ONLY news published after {cutoff_time_str} (Last 12 Hours).
 
 JSON Schema Requirements:
 [
-  {
+  {{
     "project_name": "Official Project / Protocol Name",
     "event_title": "Short descriptive event title in English",
     "event_type": "EXCHANGE_LAUNCH | BONUS_GIVEAWAY | MINING_QUEST | VC_FUNDING | AIRDROP_TESTNET | TGE_SNAPSHOT",
@@ -433,11 +430,11 @@ JSON Schema Requirements:
     "valuation": "$XX M or Undisclosed",
     "fresh_investors": "Comma separated fresh round lead/co-investors or Undisclosed",
     "total_investors": "Comma separated historical backers or Undisclosed",
-    "active_user_benefit": "Exact reward or action (e.g. Free $20 Futures Bonus / Claim Airdrop / Daily Token Mining) or 'None'",
+    "active_user_benefit": "Exact reward or action or 'None'",
     "official_direct_link": "Direct registration, claim, or testnet link",
     "source_link": "Direct official announcement, X post, or RootData link",
-    "executive_summary": "1-2 short, punchy, beautiful sentences summarizing the update and exact participation step."
-  }
+    "executive_summary": "1-2 short, punchy sentences summarizing the update."
+  }}
 ]
 Return ONLY a valid JSON array block or [] if no fresh data found.
 """
@@ -451,7 +448,7 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
             return []
 
     def build_beautiful_telegram_post(self, item, source_link, direct_link):
-        """Generates a Ultra-Clean, Short, Beautiful, Sentence-Wise Post Format (OG Metrics Completely Removed)"""
+        """Generates Clean, Short, Sentence-Wise Telegram Post (Powered by footer completely removed)"""
         p_name = escape_html(clean_val(item.get("project_name"), "Web3 Project"))
         e_title = escape_html(clean_val(item.get("event_title"), "Breaking Update"))
         round_type = escape_html(clean_val(item.get("series_round"), "Milestone Phase"))
@@ -518,8 +515,7 @@ Return ONLY a valid JSON array block or [] if no fresh data found.
             f"{benefit_section}"
             f"📝 <b>Summary:</b> {summary}\n\n"
             f"{link_block}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🤖 <i>Powered by @AirdropHeadDepartment AI Engine</i>"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
         return post_content
 
